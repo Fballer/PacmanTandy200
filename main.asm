@@ -45,6 +45,10 @@ WAIT_START:
         MVI     B,126                   ; HUD, byte-aligned
         MVI     C,8
         CALL    DRAW_STR
+WSIDL:  CALL    POLL_KEYS               ; wait until no false/stuck keys
+        LDA     KEY_FLAGS
+        ANI     01FH
+        JNZ     WSIDL
 WSLP:   CALL    POLL_KEYS
         LDA     KEY_FLAGS
         ANI     01FH                    ; space or any direction
@@ -120,8 +124,10 @@ KM1:    LDAX    D
         POP     H
         POP     B
         POP     D
-        CMA                             ; 1 = pressed, as VirtualT expects
-        MOV     M,A
+        ORA     A
+        JZ      KMST                    ; 00 = no sample, not all-keys-down
+        CMA                             ; 1 = pressed
+KMST:   MOV     M,A
         INX     H
         INX     D
         DCR     B
@@ -359,7 +365,11 @@ GLTICK: CALL    POLL_PLAY
         CALL    PAC_MOVE
         CALL    PELLET_TRY
         CALL    ENERG_TRY
-        CALL    PAC_REDRAW
+        CALL    AI_TICK                 ; Blinky think+step
+        XRA     A
+        STA     CUR_GID
+        CALL    GHOST_REDRAW
+        CALL    PAC_REDRAW              ; Pac last (complete chew)
         CALL    PAC_PACE
         JMP     GLTICK
 

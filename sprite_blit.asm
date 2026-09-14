@@ -91,9 +91,10 @@ SHR1:   ORA     A
         RET
 
 ;==============================================================================
-; SPR_DRAW -- write maze|sprite as LCD bytes at top-left (B,C).
-; Always two bytes per row so vertical (x%6==0) costs the same as a
-; mid-tile horizontal step.  Second byte is neighbor maze when aligned.
+; SPR_DRAW -- maze|sprite at top-left (B,C).
+; One LCD byte per row when x%6==0 (the 6px sprite is that byte).
+; Two bytes only when the sprite splits a byte.  Paint MUST finish; do
+; not full-box erase first -- that burst is what clipped both actors.
 ;==============================================================================
 SPR_DRAW:
         SHLD    TMP_HL
@@ -147,6 +148,8 @@ SDROW:  LDA     TMP6
         CALL    LCD_DATA
         POP     PSW
         POP     B
+        ORA     A
+        JZ      SDRN                    ; aligned: do not write neighbor
         PUSH    PSW
         INR     B
         MOV     A,B
@@ -167,7 +170,7 @@ SDROW:  LDA     TMP6
         SUB     C
         MOV     B,A
         LDA     TMP0
-        CALL    SHR_N                   ; remain 0: sprite >> 6 = 0
+        CALL    SHR_N
         ORA     D
         CALL    LCD_DATA
         JMP     SDRN
@@ -177,7 +180,7 @@ SDRN:   LDA     TMP6
         STA     TMP6
         JMP     SDROW
 
-; Restore old square if Pac moved (byte write overwrites the new square).
+; Paint current frame first, then maze-only the 1px strip we left.
 PAC_REDRAW:
         XRA     A
         CALL    SPR_SLOT_OLD
@@ -186,21 +189,12 @@ PAC_REDRAW:
         INX     D
         LDAX    D
         MOV     C,A
+        PUSH    B                       ; old xy
         LDA     PAC_X
-        CMP     B
-        JNZ     PR_ER
-        LDA     PAC_Y
-        CMP     C
-        JZ      PR_IDLE
-PR_ER:  CALL    WALL_RESTORE_BOX
-        JMP     PR_DR
-PR_IDLE:
-        CALL    PAC_PACE                ; no restore: pad so chew matches move
-PR_DR:  LDA     PAC_X
         MOV     B,A
         LDA     PAC_Y
         MOV     C,A
-        PUSH    B
+        PUSH    B                       ; new xy
         XRA     A
         CALL    SPR_SLOT_OLD
         POP     B
@@ -212,7 +206,152 @@ PR_DR:  LDA     PAC_X
         PUSH    B
         CALL    PAC_BITMAP
         POP     B
-        JMP     SPR_DRAW
+        CALL    SPR_DRAW
+        POP     B                       ; old xy
+        LDA     TMP3
+        CMP     B
+        JNZ     PR_VAC
+        LDA     TMP4
+        CMP     C
+        RZ
+PR_VAC: JMP     SPR_VACATE
+
+; Same as PAC_REDRAW for CUR_GID.  GHOST_BASE destroys BC.
+GHOST_REDRAW:
+        LDA     CUR_GID
+        INR     A
+        CALL    SPR_SLOT_OLD
+        LDAX    D
+        MOV     B,A
+        INX     D
+        LDAX    D
+        MOV     C,A
+        PUSH    B                       ; old xy
+        CALL    GHOST_BASE
+        MOV     A,M
+        MOV     B,A
+        INX     H
+        MOV     A,M
+        MOV     C,A
+        PUSH    B                       ; new xy
+        LDA     CUR_GID
+        INR     A
+        CALL    SPR_SLOT_OLD
+        POP     B
+        MOV     A,B
+        STAX    D
+        INX     D
+        MOV     A,C
+        STAX    D
+        PUSH    B
+        CALL    GHOST_BITMAP
+        POP     B
+        CALL    SPR_DRAW
+        POP     B                       ; old xy
+        LDA     TMP3
+        CMP     B
+        JNZ     GR_VAC
+        LDA     TMP4
+        CMP     C
+        RZ
+GR_VAC: JMP     SPR_VACATE
+
+; Maze-only pixels the sprite vacated.  BC = old top-left; TMP3/TMP4 = new.
+; Vertical: one row.  Horizontal: only LCD bytes no longer covered.
+SPR_VACATE:
+        LDA     TMP4
+        CMP     C
+        JZ      SV_H
+        JC      SV_UP                   ; new y < old y
+        JMP     WALL_RESTORE_ROW        ; vacated top row
+SV_UP:  MOV     A,C
+        ADI     SPR_H-1
+        MOV     C,A
+        JMP     WALL_RESTORE_ROW
+SV_H:   LDA     TMP3
+        CMP     B
+        RZ
+        MOV     A,C
+        STA     TMP6                    ; old y
+        MOV     A,B
+        CALL    DIV6
+        MOV     A,D
+        STA     TMP0                    ; old_lo
+        MOV     A,B
+        ADI     SPR_H-1
+        CALL    DIV6
+        MOV     A,D
+        STA     TMP1                    ; old_hi
+        LDA     TMP3
+        CALL    DIV6
+        MOV     A,D
+        STA     TMP2                    ; new_lo
+        LDA     TMP3
+        ADI     SPR_H-1
+        CALL    DIV6
+        MOV     A,D
+        STA     TMP5                    ; new_hi
+        LDA     TMP0
+        MOV     B,A
+        CALL    SV_INNEW
+        JNZ     SV_K0
+        MVI     A,0FFH
+        STA     TMP0
+SV_K0:  LDA     TMP1
+        MOV     B,A
+        CALL    SV_INNEW
+        JNZ     SV_K1
+        MVI     A,0FFH
+        STA     TMP1
+SV_K1:  LDA     TMP1                    ; COMPOSE in SV_COL clobbers TMP1
+        PUSH    PSW
+        LDA     TMP0
+        CPI     0FFH
+        CNZ     SV_COL
+        POP     PSW
+        CPI     0FFH
+        RZ
+        MOV     B,A
+        LDA     TMP0
+        CMP     B
+        RZ
+        MOV     A,B
+        JMP     SV_COL
+
+; Z=1 if B is in [TMP2, TMP5].
+SV_INNEW:
+        LDA     TMP2
+        CMP     B
+        JZ      SV_INY
+        JNC     SV_INN                  ; B < new_lo
+        LDA     TMP5
+        CMP     B
+        JC      SV_INN                  ; B > new_hi
+SV_INY: XRA     A
+        RET
+SV_INN: MVI     A,1
+        ORA     A
+        RET
+
+; A = LCD byte index.  TMP6 = top y.  Six maze-only rows.
+SV_COL: MOV     D,A
+        ADD     A
+        MOV     B,A
+        ADD     A
+        ADD     B                       ; *6 -> pixel x
+        MOV     B,A
+        LDA     TMP6
+        MOV     C,A
+        MVI     E,SPR_H
+SV_CL:  PUSH    B
+        PUSH    D
+        CALL    WALL_RESTORE_BYTE
+        POP     D
+        POP     B
+        INR     C
+        DCR     E
+        JNZ     SV_CL
+        RET
 
 ; OLD_XY pair for slot A -> DE (pointer).  Must not touch BC: callers
 ; hold the sprite top-left in B,C and Pac was being drawn at (0,0).

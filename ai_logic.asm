@@ -271,7 +271,7 @@ AITG:   CALL    GHOST_THINK
         LDA     CUR_GID
         INR     A
         STA     CUR_GID
-        CPI     GHOST_COUNT
+        CPI     1                       ; Blinky only until the other three are cheap to blit
         JNZ     AITG
 
         POP     H
@@ -831,13 +831,10 @@ GHOST_PICKDIR:
         MVI     B,4                     ; four candidates
 PKL:    MOV     A,M                     ; candidate dir
         STA     TMP3
-        PUSH    H
-        PUSH    B
+        PUSH    H                       ; DIR_PRI cursor
+        PUSH    B                       ; remaining count
         CALL    DIR_LEGAL
-        POP     B
-        POP     H
-        JNZ     PKNEXT                  ; NZ = illegal
-        ; legal: Manhattan(next tile, target)
+        JNZ     PKILL                   ; NZ = illegal
         CALL    NEXT_TILE               ; TMP4=nx TMP5=ny from TMP3 dir
         CALL    GHOST_BASE
         LXI     D,GH_TARGX
@@ -853,13 +850,15 @@ PKL:    MOV     A,M                     ; candidate dir
         MOV     C,A                     ; this dist
         LDA     BEST_DIST
         CMP     C                       ; A=best, C=this.  CY if best < this
-        JC      PKNEXT                  ; this is worse
-        JZ      PKNEXT                  ; tie: keep earlier DIR_PRI entry
+        JC      PKILL                   ; this is worse
+        JZ      PKILL                   ; tie: keep earlier DIR_PRI entry
         MOV     A,C
         STA     BEST_DIST
         LDA     TMP3
         STA     BEST_DIR
-PKNEXT: INX     H
+PKILL:  POP     B
+        POP     H
+        INX     H
         DCR     B
         JNZ     PKL
 

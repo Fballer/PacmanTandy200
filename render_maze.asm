@@ -516,7 +516,27 @@ DWBN:   LDA     TMP0
         STA     TMP0
         JMP     DWY
 
-; Write composed LCD byte(s) covering 6 pixels at (B,C).
+; One maze LCD byte at pixel (B,C).  Used when a sprite leaves a byte.
+WALL_RESTORE_BYTE:
+        MOV     A,C
+        CPI     LCD_HEIGHT
+        RNC
+        PUSH    B
+        CALL    XY_TO_ADDR
+        CALL    LCD_SET_ADDR
+        MVI     A,LCD_REG_WRITE
+        CALL    LCD_CMD
+        POP     B
+        MOV     A,B
+        CALL    DIV6
+        MOV     A,D
+        CPI     WALL_BYTES
+        RNC
+        MOV     B,A
+        CALL    COMPOSE_BYTE
+        JMP     LCD_DATA
+
+; Maze byte(s) covering 6 pixels at (B,C).  Aligned = one byte.
 WALL_RESTORE_ROW:
         MOV     A,C
         CPI     LCD_HEIGHT
@@ -538,7 +558,9 @@ WALL_RESTORE_ROW:
         CALL    COMPOSE_BYTE
         CALL    LCD_DATA
         POP     D
-        POP     PSW                     ; remain unused: always write neighbor
+        POP     PSW
+        ORA     A
+        RZ                              ; aligned: sprite lived in this byte
         MOV     A,D
         INR     A
         CPI     WALL_BYTES
