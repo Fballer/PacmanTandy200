@@ -279,13 +279,13 @@ AITG:   CALL    GHOST_THINK
         POP     B
         RET
 
-; Refresh Pac tile coords from pixels (divide by 8, no MUL).
+; Refresh Pac tile coords from pixels (divide by 6).
 PAC_TILES:
         LDA     PAC_X
-        CALL    PIX_TO_TILE
+        CALL    PIX_TO_TX
         STA     PAC_TX
         LDA     PAC_Y
-        CALL    PIX_TO_TILE
+        CALL    PIX_TO_TY
         STA     PAC_TY
         RET
 
@@ -567,7 +567,7 @@ GHOST_THINK:
         CALL    GHOST_BASE
         ; update TX/TY from pixels
         MOV     A,M                     ; X
-        CALL    PIX_TO_TILE
+        CALL    PIX_TO_TX
         PUSH    H
         LXI     B,GH_TX
         DAD     B
@@ -575,7 +575,7 @@ GHOST_THINK:
         POP     H
         INX     H
         MOV     A,M                     ; Y
-        CALL    PIX_TO_TILE
+        CALL    PIX_TO_TY
         DCX     H
         PUSH    H
         LXI     B,GH_TY
@@ -607,17 +607,17 @@ GHOST_THINK:
 GTNR:   CALL    GHOST_PICKDIR
         RET
 
-; Z=1 if this ghost's pixel x,y are both at TILE_CENTER (the decision point).
+; Z=1 if this ghost's top-left sits on a tile (X%6==0, Y%6==1).
 AT_CENTER:
         CALL    GHOST_BASE
         MOV     A,M
-        ANI     TILE_MASK
-        CPI     TILE_CENTER
+        CALL    DIV6
+        ORA     A
         JNZ     ATCNO
         INX     H
         MOV     A,M
-        ANI     TILE_MASK
-        CPI     TILE_CENTER
+        CALL    DIV6
+        CPI     1
         JNZ     ATCNO
         XRA     A                       ; Z=1
         RET
@@ -669,9 +669,9 @@ TARG_SCATTER:
         JMP     TARG_STORE
 
 TARG_HOME:
-        MVI     A,12                    ; house center tile
+        MVI     A,9                     ; house center tile
         STA     TMP0
-        MVI     A,8
+        MVI     A,10
         STA     TMP1
         JMP     TARG_STORE
 
@@ -1120,22 +1120,23 @@ GSMOVE: CALL    GHOST_BASE
         JNC     GSHOME
         DCX     H                       ; back to X
         MOV     A,M
-        CPI     0FFH                    ; 0 + 0FFH
+        CPI     BORDER_X0               ; walked left from MAZE_X0
         JNZ     GSW1
         MVI     M,PF_XMAX
         JMP     GSHOME
-GSW1:   CPI     192                     ; 191 + 1
+GSW1:   CPI     PF_XWRAP
         JNZ     GSHOME
-        MVI     M,0
+        MVI     A,MAZE_X0
+        MOV     M,A
 
 GSHOME: ; if we have left the house pixel box, clear GH_HOME
         CALL    GHOST_BASE
         MOV     A,M
-        CALL    PIX_TO_TILE
+        CALL    PIX_TO_TX
         MOV     D,A
         INX     H
         MOV     A,M
-        CALL    PIX_TO_TILE
+        CALL    PIX_TO_TY
         MOV     E,A
         MOV     A,D
         STA     TMP4

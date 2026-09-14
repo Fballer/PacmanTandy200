@@ -1,0 +1,25 @@
+---
+description: Two Pac-Man builds — VirtualT emulator vs real Tandy 200
+alwaysApply: true
+---
+
+# Emulator vs real Model 200
+
+The user plans **two copies** of this game later: one tuned for **VirtualT**, one for a **real Tandy 200**. Do not assume one binary must stay a compromise forever.
+
+Until they are split, keep emulator-only work **isolated and commented** (e.g. `KBD_MIRROR` writing ROM keyscan RAM at `0FD0EH`) so it can be dropped or `#ifdef`-style excluded on hardware.
+
+## VirtualT-only (not real silicon)
+
+- Host keys update the emulated matrix only after RAM at `0FD0EH` matches `~keyscan[0..8]`, or after ~10 key-repeat events (~0.5s hold). Real 200: `IN E0` sees a press on the next strobe.
+- VirtualT letter keys are active-low; SPACE/ARROWS are often active-high copies of `gSpecialKeys`. Real silicon is active-low.
+- VirtualT LCD reads often return 0; do not RMW sprite pixels with `PLOT_OR` / `PLOT_CLR`.
+- Never `IN` 8155 PA/PB (latch not returned; restore garbage kills LCD CS).
+
+## Real 200
+
+- No keyscan-RAM gate; `KBD_MIRROR` is extra CPU (~1ms/step), not extra input lag.
+- Hardware copy can omit `KBD_MIRROR` and keep a 2-column WASD strobe.
+- Same 8085 / HD61830 / 8155 rules still apply.
+
+When splitting: `PACMAN.CO` (or `PACMAN_VT.CO` / `PACMAN_HW.CO`) plus a build flag or small include — do not fork the whole maze/AI unless needed.

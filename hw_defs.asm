@@ -8,7 +8,7 @@
 ;   1. ORG 0D000H  -- load into the Tandy 200 high RAM bank (A000-FFFF).
 ;   2. On entry we snapshot BASIC's Stack Pointer so we can RET later.
 ;   3. All runtime RAM (DS) lives at the BOTTOM of this file.  Count it.
-;      Budget: under 300 bytes.  We use 267 bytes.  No 3.8KB screen buffer.
+;      Budget: under 300 bytes.  Pellet map is 63 bytes.  No 3.8KB screen buffer.
 ;   4. maze_data, ai_logic, render_maze, sprite_blit, and main are INCLUDEd
 ;      before the DS block so code/tables sit in the image and variables last.
 ;
@@ -76,77 +76,86 @@ LCD_MODE_OFF    EQU     00H             ; display off
 LCD_PITCH_8     EQU     07H             ; Hp=8  (one byte = 8 pixels)
 LCD_PITCH_6     EQU     05H             ; Hp=6  (T200 character pitch)
 
-; Visible LCD is 240 x 128.  240/8 = 30 bytes/row.
-; James Yi measured the controller walking 40 bytes/row (value 38 on r2).
-; We program 30 so our 192+48 layout maps 1:1 onto the visible 240 pixels.
-; If Phase 2 drawing looks shifted, change LCD_HBBYTES to 40 and HCHARS to 39.
+; Tandy 200 LCD (James Yi LCDIO.200 + VirtualT T200_Disp):
+;   40 bytes per scanline, 6 pixels per byte, bit 0 = LEFT pixel.
+;   40 * 6 = 240.  Visible VRAM = 40 * 128 = 5120 bytes.
+; r0=63 screen on, r1=0 6-pixel pitch, r2=38 normal, r3=63 ROM duty.
 LCD_WIDTH       EQU     240
 LCD_HEIGHT      EQU     128
-LCD_HBBYTES     EQU     30              ; visible bytes per scanline
-LCD_HCHARS      EQU     29              ; HN-1  (30-1)
-LCD_DUTY        EQU     127             ; NX-1  (128-1)  -> 1/128 duty
+LCD_HBBYTES     EQU     40              ; bytes per scanline
+LCD_HCHARS      EQU     38              ; James Yi "normal display"
+LCD_PITCH_T200  EQU     00H             ; r1=0 -> 6 pixels/byte
+LCD_MODE_T200   EQU     63              ; r0=63 -> screen on (includes gfx bit)
+LCD_DUTY        EQU     63              ; James Yi ROM value
+LCD_VRAM        EQU     5120            ; 40 * 128  (assembler has no MUL)
 
 ;==============================================================================
-; 3. Playfield geometry  (Atari Lynx-style: whole maze on screen, no scroll)
+; 3. Playfield geometry  (narrower Excel 6x6 maze, on LCD bytes)
 ;------------------------------------------------------------------------------
-PF_W            EQU     192             ; playfield pixels (left)
-PF_H            EQU     128             ; playfield pixels
-HUD_W           EQU     48              ; HUD column (right)  192+48=240
-HUD_X           EQU     192             ; first HUD pixel column
+; Tandy 200 packs 6 pixels per VRAM byte.  Tile (0,0) is at X=6 so every
+; 6x6 wall/sprite ROW is exactly one LCD byte -- no split writes.
+; Excel: blue=wall, black=pellet, green=HUD.  19x21 tiles + 1px border.
+; Left green margin x=0..4, border x=5, maze x=6..119, border x=120,
+; green HUD x=121..239.  Divider at x=126 (byte 21).
+;------------------------------------------------------------------------------
+PF_W            EQU     118             ; maze pixels (2px border + 19*6)
+PF_H            EQU     128
+HUD_W           EQU     114             ; 240-126
+HUD_X           EQU     126             ; first HUD pixel (21*6, byte aligned)
 
-TILE            EQU     8               ; 8x8 tiles, corridors 7-8 px wide
-TILE_MASK       EQU     07H
-TILE_CENTER     EQU     04H             ; sprite center inside a tile
-MAP_W           EQU     24              ; 192/8
-MAP_H           EQU     16              ; 128/8
+TILE            EQU     6               ; 6x6 tiles = one LCD byte wide
+MAP_W           EQU     19              ; Excel interior (two tiles narrower)
+MAP_H           EQU     21
+MAZE_X0         EQU     6               ; tile (0,0) pixel X  (6 % 6 == 0)
+MAZE_Y0         EQU     1               ; tile (0,0) pixel Y
+BORDER_X0       EQU     4               ; extra 2-pixel wall on the left
+BORDER_X1       EQU     121             ; extra 2-pixel wall on the right
+PEL_OX          EQU     2               ; 2x2 pellet offset inside a tile
+PEL_OY          EQU     2
 
-; Warp tunnels: one tile-row tall, wrap pixel X=0 <-> X=191
-TUN_TY          EQU     7               ; tile row
-TUN_Y0          EQU     56              ; pixel Y of tunnel (inclusive)
-TUN_Y1          EQU     63              ; pixel Y of tunnel (inclusive)
-PF_XMAX         EQU     191
+; Warp tunnels: tile row 9, pixel Y=55..60, wrap sprite X=6 <-> 114
+TUN_TY          EQU     9
+TUN_Y0          EQU     55
+TUN_Y1          EQU     60
+PF_XMAX         EQU     114             ; last tile's top-left X (tile 18)
+PF_XWRAP        EQU     115             ; one pixel past last tile -> wrap to 6
 
-; Ghost house (pixel box).  Gate is a SINGLE 8-pixel line on the roof.
-HOUSE_X0        EQU     72
-HOUSE_X1        EQU     119             ; inclusive
-HOUSE_Y0        EQU     56
-HOUSE_Y1        EQU     71              ; inclusive  (Y=56..72 as specified)
-HOUSE_TX0       EQU     9
-HOUSE_TX1       EQU     14
-HOUSE_TY0       EQU     7
-HOUSE_TY1       EQU     8
-GATE_X          EQU     92              ; single-line door, 8 px wide
-GATE_W          EQU     8
-GATE_Y          EQU     56
-GATE_TX         EQU     11
-GATE_TY         EQU     7
+; Ghost house tiles (gate is (9,8), interior (7..11, 9..10))
+HOUSE_TX0       EQU     7
+HOUSE_TX1       EQU     11
+HOUSE_TY0       EQU     8
+HOUSE_TY1       EQU     10
+GATE_TX         EQU     9
+GATE_TY         EQU     8
+GATE_X          EQU     60              ; MAZE_X0 + 9*6
+GATE_Y          EQU     49              ; MAZE_Y0 + 8*6
+GATE_W          EQU     6
 
-; Forbidden UP-turns (Dossier "red zones"): corridor just above the house.
-; Enforced in scatter+chase, ignored in frightened.
-FORBID_TY       EQU     6
+; Forbidden UP-turns: the two corridors of the T above the house.
+FORBID_TY       EQU     7
 FORBID_TX0      EQU     8
-FORBID_TX1      EQU     15
+FORBID_TX1      EQU     10
 
-; Static fruit spawn (pixel center of tile 12,10 -- under the house)
-FRUIT_X         EQU     100
-FRUIT_Y         EQU     84
-FRUIT_TX        EQU     12
-FRUIT_TY        EQU     10
+; Fruit: tile (9,12) open slot under the house.  Plus at origin+(2,2).
+FRUIT_TX        EQU     9
+FRUIT_TY        EQU     12
+FRUIT_X         EQU     62
+FRUIT_Y         EQU     75
 
-; Actor start positions (pixel centers)
-PAC_START_X     EQU     100
-PAC_START_Y     EQU     116
-PAC_START_TX    EQU     12
-PAC_START_TY    EQU     14
+; Actor positions are sprite TOP-LEFT (6x6 fills the tile when aligned).
+PAC_START_TX    EQU     9
+PAC_START_TY    EQU     16              ; under the T on the energizer row
+PAC_START_X     EQU     60
+PAC_START_Y     EQU     97
 
-BLINKY_X0       EQU     100             ; just above the house, outside
-BLINKY_Y0       EQU     52
-PINKY_X0        EQU     100             ; house center
-PINKY_Y0        EQU     68
-INKY_X0         EQU     92              ; house left
-INKY_Y0         EQU     68
-CLYDE_X0        EQU     108             ; house right
-CLYDE_Y0        EQU     68
+BLINKY_X0       EQU     60              ; tile (9,7) above the gate
+BLINKY_Y0       EQU     43
+PINKY_X0        EQU     60              ; tile (9,10) house center
+PINKY_Y0        EQU     61
+INKY_X0         EQU     54              ; tile (8,10)
+INKY_Y0         EQU     61
+CLYDE_X0        EQU     66              ; tile (10,10)
+CLYDE_Y0        EQU     61
 
 ;==============================================================================
 ; 4. Directions  (must stay 0-3 so "reverse" is XOR 2)
@@ -201,14 +210,14 @@ GDOT_INKY       EQU     17
 GDOT_CLYDE      EQU     32
 
 ; Scatter targets (tile coords, 8-bit wrap: 0FFH = -1, just outside the maze)
-SCAT_BLINKY_X   EQU     24
+SCAT_BLINKY_X   EQU     19
 SCAT_BLINKY_Y   EQU     0FFH            ; top-right
 SCAT_PINKY_X    EQU     0FFH
 SCAT_PINKY_Y    EQU     0FFH            ; top-left
-SCAT_INKY_X     EQU     24
-SCAT_INKY_Y     EQU     16              ; bottom-right
+SCAT_INKY_X     EQU     19
+SCAT_INKY_Y     EQU     21              ; bottom-right
 SCAT_CLYDE_X    EQU     0FFH
-SCAT_CLYDE_Y    EQU     16              ; bottom-left
+SCAT_CLYDE_Y    EQU     21              ; bottom-left
 
 CLYDE_SHY       EQU     8               ; tiles; below this, Clyde scatters
 
@@ -218,8 +227,8 @@ TICKS_7S        EQU     420
 TICKS_20S       EQU     1200
 TICKS_5S        EQU     300
 
-PELLET_BYTES    EQU     24              ; 8 pellet-rows x 3 bytes = 192 bits
-PELLET_ROWS     EQU     8
+PELLET_BYTES    EQU     63              ; 21 rows x 3 bytes
+PELLET_ROWS     EQU     21
 ENERG_COUNT     EQU     4
 
 ; Keyboard flag bits in KEY_FLAGS
@@ -236,17 +245,20 @@ KEY_EXIT        EQU     00100000B       ; BREAK
 ; Phase 3 runs GAME_LOOP until BREAK, then EXIT returns to BASIC.
 ;==============================================================================
 START:  DI
+        MVI     A,1CH                   ; SIM: MSE + mask RST 7.5 + clear pending
+        SIM
         LXI     H,0
         DAD     SP                      ; HL = BASIC's SP
         SHLD    SAVED_SP
         LXI     SP,LOCAL_STK_TOP        ; our private stack (grows down)
 
+        CALL    KBD_INIT                ; PA/PB directions, col9 off, VT keyscan
         CALL    LCD_INIT_GFX            ; graphics mode, known registers
         CALL    AI_RESET                ; ghosts, timers, pellet RAM copy
         CALL    RENDER_MAZE             ; Phase 2: stroke walls + pellets
-        CALL    SPRITES_INIT            ; Phase 2: 7x7 dirty-rect first paint
-        EI
-        CALL    GAME_LOOP               ; Phase 3: until BREAK
+        CALL    SPRITES_INIT            ; Phase 2: 6x6 dirty-rect first paint
+        CALL    WAIT_START              ; SPACE, then draw GO, then run
+        CALL    GAME_LOOP               ; Phase 3: until reset
         JMP     EXIT
 
 ;------------------------------------------------------------------------------
@@ -274,17 +286,20 @@ EXIT:   CALL    LCD_RESTORE             ; ROM-friendly HD61830 state
 ; hardware timer will otherwise tear the LCD image mid-write.
 ;==============================================================================
 
-; Wait until busy=0.  Preserves A via stack.  Timeout ~256 polls.
+; Wait until busy=0.  Preserves A.  Timeout: VirtualT often leaves bit 7 stuck.
 LCD_WAIT:
         PUSH    PSW
         PUSH    B
-        MVI     B,00H
+        MVI     B,08H
 LWLOOP: IN      LCD_IR
-        RLC                             ; bit 7 -> Carry
-        JNC     LWOK                    ; CY=0 => not busy
+        RLC
+        JNC     LWOK
         DCR     B
-        JNZ     LWLOOP                  ; timeout: continue anyway
-LWOK:   POP     B
+        JNZ     LWLOOP
+LWOK:   MVI     B,10H
+LWDLY:  DCR     B
+        JNZ     LWDLY
+        POP     B
         POP     PSW
         RET
 
@@ -319,7 +334,6 @@ LCD_INIT_GFX:
         LXI     H,GFX_INIT_TAB
         MVI     B,GFX_INIT_LEN
         CALL    LCD_SEQ
-        EI
         RET
 
 ; Restore the T200 ROM's working HD61830 configuration (graphics, 8px pitch).
@@ -342,8 +356,8 @@ LCD_SET_CHAR:
 
 ; (register, data) pairs
 GFX_INIT_TAB:
-        DB      LCD_REG_MODE,  LCD_MODE_GFX
-        DB      LCD_REG_PITCH, LCD_PITCH_8
+        DB      LCD_REG_MODE,  LCD_MODE_T200
+        DB      LCD_REG_PITCH, LCD_PITCH_T200
         DB      LCD_REG_HCHARS,LCD_HCHARS
         DB      LCD_REG_DUTY,  LCD_DUTY
         DB      LCD_REG_CPOS,  00H
@@ -354,8 +368,8 @@ GFX_INIT_TAB:
 GFX_INIT_LEN    EQU     9
 
 GFX_REST_TAB:
-        DB      LCD_REG_MODE,  LCD_MODE_GFX
-        DB      LCD_REG_PITCH, LCD_PITCH_8
+        DB      LCD_REG_MODE,  LCD_MODE_T200
+        DB      LCD_REG_PITCH, LCD_PITCH_T200
         DB      LCD_REG_HCHARS,LCD_HCHARS
         DB      LCD_REG_DUTY,  LCD_DUTY
         DB      LCD_REG_SAD_L, 00H
@@ -383,11 +397,14 @@ CHAR_INIT_LEN   EQU     2
 ; byte at E0H means that key is down.  We invert so KEY_FLAGS bits are 1
 ; when pressed.
 ;
-; M100-compatible arrow column is bit 5 of B1:
-;   row7=Right  row6=Left  row5=Up  row4=Down
-; Space is column bit 6 of B1, row 0.
-; BREAK is column 9 (B2 bit 0), row 7.
-; If arrows feel swapped on real silicon, this is the one table to edit.
+; VirtualT (T200/M100) packs SPACE/ARROWS as active-HIGH copies of
+; gSpecialKeys, not the active-LOW letter columns:
+;   col6 bit0 = SPACE
+;   col5 bit4=Left bit5=Right bit6=Up bit7=Down
+; Real silicon is active-LOW (space col6 row0; M100 arrows col5 row4-7).
+; POLL_KEYS in main.asm accepts both encodings, plus WASD (active-LOW
+; letters, same on VirtualT and hardware).  PB bit0 must stay 1 or IN E0
+; always returns column 9 and the PA strobes never reach arrows/space.
 ;==============================================================================
 KEYSCAN:
         PUSH    B
@@ -452,14 +469,15 @@ KSNO_SP:
         LDA     SAV_B1
         OUT     PIO_PA
 
-        ; --- BREAK: column 9 = Port B bit 0, row 7 ---
+        ; BREAK: column 9 = Port B bit 0, row 7.  Active-low.  Only count
+        ; a real 7FH (bit 7 low, others high).  00H means floating/unread
+        ; and would look like every key including BREAK after invert.
         LDA     SAV_B2
         ANI     11111110B
         OUT     PIO_PB
         IN      KBD_ROWS
-        CMA
-        ANI     10000000B
-        JZ      KSNO_BR
+        CPI     07FH
+        JNZ     KSNO_BR
         LDA     KEY_FLAGS
         ORI     KEY_EXIT
         STA     KEY_FLAGS
@@ -478,20 +496,36 @@ KSNO_BR:
 ;==============================================================================
 ; Tiny 8085 math used by AI  (no MUL anywhere)
 ;------------------------------------------------------------------------------
-; PIX_TO_TILE:  A = pixel 0..191  ->  A = tile 0..23   (unsigned / 8)
-PIX_TO_TILE:
-        RRC
-        RRC
-        RRC
-        ANI     1FH
-        RET
-
-; TILE_TO_PIX:  A = tile  ->  A = pixel center (tile*8 + 4)
-TILE_TO_PIX:
+; TILE_MUL6: A = tile 0..19 -> A = tile*6.  Destroys B.
+TILE_MUL6:
+        MOV     B,A
         ADD     A                       ; *2
         ADD     A                       ; *4
-        ADD     A                       ; *8
-        ADI     TILE_CENTER
+        ADD     B                       ; *6
+        RET
+
+; PIX_TO_TX / PIX_TO_TY: pixel -> tile.  Uses DIV6 (in render_maze.asm).
+PIX_TO_TX:
+        SUI     MAZE_X0
+        JNC     DIV6Q
+        XRA     A
+        JMP     DIV6Q
+PIX_TO_TY:
+        SUI     MAZE_Y0
+        JNC     DIV6Q
+        XRA     A
+DIV6Q:  CALL    DIV6
+        MOV     A,D
+        RET
+
+; TILE_TO_PX / TILE_TO_PY: tile -> top-left pixel of that 6x6 cell.
+TILE_TO_PX:
+        CALL    TILE_MUL6
+        ADI     MAZE_X0
+        RET
+TILE_TO_PY:
+        CALL    TILE_MUL6
+        ADI     MAZE_Y0
         RET
 
 ; ABS_DIFF:  A = |A - C|   (8-bit, works for 0FFH used as -1)
@@ -600,16 +634,15 @@ CUR_GID:        DS      1
 ; Dirty-rectangle previous positions (Pac + 4 ghosts) for Phase 2 blitter
 OLD_XY:         DS      10
 
-; 5 sprites x 16 bytes (7 rows * 2 LCD bytes, padded).  7x7 can straddle
-; a byte boundary, so each row saves TWO VRAM bytes.
-SPR_BACK:       DS      80
+; 5 sprites x 16 bytes (unused -- we restroke, we do not save LCD bytes)
+; SPR_BACK removed to stay under 300 RAM with 63-byte pellet map.
 
-; Private call stack (grows toward LOCAL_STK).  48 bytes = 24 nested words.
-LOCAL_STK:      DS      48
-LOCAL_STK_TOP   EQU     LOCAL_STK+48
+; Private call stack (grows toward LOCAL_STK).  96 bytes = 48 nested words.
+LOCAL_STK:      DS      96
+LOCAL_STK_TOP   EQU     LOCAL_STK+96
 
 RAM_END:
 RAM_USED        EQU     RAM_END-RAM_START
-; RAM_USED = 267 decimal.  Hard cap is 300.  Do not add a framebuffer.
+; RAM_USED counted at assemble time.  Hard cap is 300.  Do not add a framebuffer.
 
         END
