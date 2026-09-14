@@ -245,12 +245,14 @@ START:  DI
 
         CALL    LCD_INIT_GFX            ; graphics mode, known registers
         CALL    AI_RESET                ; ghosts, timers, pellet RAM copy
-        EI                              ; RST 7.5 may run; Phase 2 blits use DI/EI
+        CALL    RENDER_MAZE             ; Phase 2: stroke walls + pellets
+        CALL    SPRITES_INIT            ; Phase 2: 7x7 dirty-rect first paint
+        EI
 
-P1WAIT: CALL    KEYSCAN
+P2WAIT: CALL    KEYSCAN
         LDA     KEY_FLAGS
         ANI     KEY_EXIT
-        JZ      P1WAIT
+        JZ      P2WAIT
         JMP     EXIT
 
 ;------------------------------------------------------------------------------
@@ -525,6 +527,8 @@ MANHATTAN:
 ;==============================================================================
         INCLUDE maze_data.asm
         INCLUDE ai_logic.asm
+        INCLUDE render_maze.asm
+        INCLUDE sprite_blit.asm
 
 ;==============================================================================
 ; RUNTIME RAM  -- every DS byte is counted.  Do not add a screen buffer.
@@ -596,9 +600,9 @@ CUR_GID:        DS      1
 ; Dirty-rectangle previous positions (Pac + 4 ghosts) for Phase 2 blitter
 OLD_XY:         DS      10
 
-; 5 sprites x 8 bytes of under-sprite LCD backup (Phase 2).  Reserved now
-; so we do not blow the 300-byte cap later.
-SPR_BACK:       DS      40
+; 5 sprites x 16 bytes (7 rows * 2 LCD bytes, padded).  7x7 can straddle
+; a byte boundary, so each row saves TWO VRAM bytes.
+SPR_BACK:       DS      80
 
 ; Private call stack (grows toward LOCAL_STK).  48 bytes = 24 nested words.
 LOCAL_STK:      DS      48
@@ -606,6 +610,6 @@ LOCAL_STK_TOP   EQU     LOCAL_STK+48
 
 RAM_END:
 RAM_USED        EQU     RAM_END-RAM_START
-; RAM_USED = 222 decimal.  Hard cap is 300.  Do not add a framebuffer.
+; RAM_USED = 262 decimal.  Hard cap is 300.  Do not add a framebuffer.
 
         END

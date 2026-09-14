@@ -9,7 +9,7 @@ No Z80 instructions. No multiply. No full-screen framebuffer. Maze walls are thi
 | Phase | What | State |
 |-------|------|--------|
 | 1 | Hardware defs, vector maze, Dossier ghost AI | Done |
-| 2 | LCD wall renderer + sprite blitter | In progress |
+| 2 | LCD wall renderer + sprite blitter | Done |
 | 3 | Game loop (input, pellets, timers) | Not started |
 | 4 | `build.py` → `.co` file + VirtualT guide | Not started |
 
