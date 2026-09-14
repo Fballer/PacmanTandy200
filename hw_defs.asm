@@ -233,9 +233,8 @@ KEY_EXIT        EQU     00100000B       ; BREAK
 ;==============================================================================
 ; ENTRY -- save BASIC's SP immediately, never return without restoring it.
 ;------------------------------------------------------------------------------
-; Phase 3 will replace the idle wait with the real game loop.
-; For Phase 1 we:  save SP, take a local stack, put the LCD in graphics
-; mode, reset AI state, then sit in a tiny key-wait so BREAK returns to BASIC.
+; Phase 2 draws the maze and sprites, then waits for BREAK to return to BASIC.
+; Phase 3 will replace P2WAIT with the real game loop.
 ;==============================================================================
 START:  DI
         LXI     H,0
