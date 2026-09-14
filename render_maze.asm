@@ -127,6 +127,33 @@ PLOT_OR:
         POP     D
         RET
 
+;------------------------------------------------------------------------------
+; PLOT_CLR -- clear pixel (B,C).  Used when a pellet/fruit is eaten so the
+; dot does not come back from a sprite background restore.
+;------------------------------------------------------------------------------
+PLOT_CLR:
+        MOV     A,B
+        CPI     LCD_WIDTH
+        RNC
+        MOV     A,C
+        CPI     LCD_HEIGHT
+        RNC
+        PUSH    D
+        CALL    XY_TO_ADDR              ; HL=addr, A=mask
+        CMA
+        MOV     D,A                     ; inverted mask
+        PUSH    H
+        CALL    LCD_SET_ADDR
+        CALL    LCD_RD_BYTE
+        ANA     D
+        MOV     D,A
+        POP     H
+        CALL    LCD_SET_ADDR
+        MOV     A,D
+        CALL    LCD_WR_BYTE
+        POP     D
+        RET
+
 ; OR an entire byte at pixel (B,C) which MUST be byte-aligned (x & 7 == 0).
 PLOT_BYTE_OR:
         PUSH    D

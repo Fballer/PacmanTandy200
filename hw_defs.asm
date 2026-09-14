@@ -8,9 +8,9 @@
 ;   1. ORG 0D000H  -- load into the Tandy 200 high RAM bank (A000-FFFF).
 ;   2. On entry we snapshot BASIC's Stack Pointer so we can RET later.
 ;   3. All runtime RAM (DS) lives at the BOTTOM of this file.  Count it.
-;      Budget: under 300 bytes.  We use 224 bytes.  No 3.8KB screen buffer.
-;   4. maze_data.asm and ai_logic.asm are INCLUDEd before the DS block
-;      so code/tables sit in ROM-image space and variables sit last.
+;      Budget: under 300 bytes.  We use 267 bytes.  No 3.8KB screen buffer.
+;   4. maze_data, ai_logic, render_maze, sprite_blit, and main are INCLUDEd
+;      before the DS block so code/tables sit in the image and variables last.
 ;
 ; Assemble later with:  hw_defs.asm  (this file pulls the other two in).
 ;==============================================================================
@@ -233,8 +233,7 @@ KEY_EXIT        EQU     00100000B       ; BREAK
 ;==============================================================================
 ; ENTRY -- save BASIC's SP immediately, never return without restoring it.
 ;------------------------------------------------------------------------------
-; Phase 2 draws the maze and sprites, then waits for BREAK to return to BASIC.
-; Phase 3 will replace P2WAIT with the real game loop.
+; Phase 3 runs GAME_LOOP until BREAK, then EXIT returns to BASIC.
 ;==============================================================================
 START:  DI
         LXI     H,0
@@ -247,11 +246,7 @@ START:  DI
         CALL    RENDER_MAZE             ; Phase 2: stroke walls + pellets
         CALL    SPRITES_INIT            ; Phase 2: 7x7 dirty-rect first paint
         EI
-
-P2WAIT: CALL    KEYSCAN
-        LDA     KEY_FLAGS
-        ANI     KEY_EXIT
-        JZ      P2WAIT
+        CALL    GAME_LOOP               ; Phase 3: until BREAK
         JMP     EXIT
 
 ;------------------------------------------------------------------------------
@@ -528,6 +523,7 @@ MANHATTAN:
         INCLUDE ai_logic.asm
         INCLUDE render_maze.asm
         INCLUDE sprite_blit.asm
+        INCLUDE main.asm
 
 ;==============================================================================
 ; RUNTIME RAM  -- every DS byte is counted.  Do not add a screen buffer.
@@ -573,6 +569,11 @@ PELLET_LEFT:    DS      1
 ENERG_LEFT:     DS      1
 GAME_STATE:     DS      1
 GHOST_PTS:      DS      1               ; 0..3 -> 200/400/800/1600
+ENERG_MASK:     DS      1               ; bits 0-3 = energizer still there
+DOT_EATEN:      DS      1               ; pellets eaten this board (fruit)
+CLR_KIND:       DS      1               ; 0=none 1=pellet 2=energizer 3=fruit
+CLR_X:          DS      1
+CLR_Y:          DS      1
 
 PELLET_BITS:    DS      PELLET_BYTES    ; 24-byte live eaten/not-eaten mask
 
@@ -609,6 +610,6 @@ LOCAL_STK_TOP   EQU     LOCAL_STK+48
 
 RAM_END:
 RAM_USED        EQU     RAM_END-RAM_START
-; RAM_USED = 262 decimal.  Hard cap is 300.  Do not add a framebuffer.
+; RAM_USED = 267 decimal.  Hard cap is 300.  Do not add a framebuffer.
 
         END

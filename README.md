@@ -10,7 +10,7 @@ No Z80 instructions. No multiply. No full-screen framebuffer. Maze walls are thi
 |-------|------|--------|
 | 1 | Hardware defs, vector maze, Dossier ghost AI | Done |
 | 2 | LCD wall renderer + sprite blitter | Done |
-| 3 | Game loop (input, pellets, timers) | Not started |
+| 3 | Game loop (input, pellets, timers) | Done |
 | 4 | `build.py` → `.co` file + VirtualT guide | Not started |
 
 Load address / entry: `0xD000`. Runtime `DS` budget: under 300 bytes.
@@ -22,6 +22,7 @@ Load address / entry: `0xD000`. Runtime `DS` budget: under 300 bytes.
 - `ai_logic.asm` — Blinky / Pinky / Inky / Clyde targeting (Pac-Man Dossier)
 - `render_maze.asm` — 1-pixel wall renderer (Phase 2)
 - `sprite_blit.asm` — 7×7 dirty-rect blitter (Phase 2)
+- `main.asm` — keyboard, Pac-Man motion, pellets, deaths, level loop (Phase 3)
 
 ## Hardware notes
 

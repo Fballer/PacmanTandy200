@@ -323,7 +323,15 @@ SPRITES_INIT:
 ;==============================================================================
 SPRITES_REDRAW:
         DI
-        ; erase Pac
+        CALL    SPRITES_ERASE
+        CALL    SPRITES_PAINT
+        EI
+        CALL    FRAME_DELAY
+        RET
+
+; Restore saved background under every sprite.  Interrupts already off.
+; GAME_LOOP calls this, then PLOT_CLR for eaten dots, then SPRITES_PAINT.
+SPRITES_ERASE:
         XRA     A
         CALL    SPR_SLOT_OLD
         LDAX    D
@@ -334,7 +342,6 @@ SPRITES_REDRAW:
         XRA     A
         CALL    SPR_SLOT_BUF
         CALL    SPR_RESTORE
-        ; erase ghosts
         XRA     A
         STA     CUR_GID
 SRE_G:  LDA     CUR_GID
@@ -354,11 +361,6 @@ SRE_G:  LDA     CUR_GID
         STA     CUR_GID
         CPI     GHOST_COUNT
         JNZ     SRE_G
-        ; now INIT-style redraw (save + draw, refresh OLD_XY)
-        ; fall into the same body as INIT without the outer DI/EI
-        CALL    SPRITES_PAINT
-        EI
-        CALL    FRAME_DELAY
         RET
 
 ; Paint all five at current positions (interrupts already off).

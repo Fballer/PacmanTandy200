@@ -52,7 +52,44 @@ ARPEL:  MOV     A,M
         STA     PELLET_LEFT
         MVI     A,ENERG_COUNT
         STA     ENERG_LEFT
+        MVI     A,0FH
+        STA     ENERG_MASK
+        XRA     A
+        STA     SCORE
+        STA     SCORE+1
+        STA     SCORE+2
+        STA     DOT_EATEN
+        STA     CLR_KIND
+        STA     DOT_GUSE
+        MVI     A,3
+        STA     LIVES
+        MVI     A,1
+        STA     LEVEL
+        CALL    AI_RESET_ACTORS
+        POP     H
+        POP     D
+        POP     B
+        RET
 
+; After a death: actors and timers home, pellets/score/lives stay.
+; Dossier: switch to the GLOBAL house-release counter.
+AI_RESET_LIFE:
+        PUSH    B
+        PUSH    D
+        PUSH    H
+        MVI     A,1
+        STA     DOT_GUSE
+        XRA     A
+        STA     DOT_GLOBAL
+        STA     GHOST_PTS
+        STA     CLR_KIND
+        CALL    AI_RESET_ACTORS
+        POP     H
+        POP     D
+        POP     B
+        RET
+
+AI_RESET_ACTORS:
         ; Pac-Man from ACTOR_INIT record 0
         LXI     H,ACTOR_INIT
         MOV     A,M
@@ -142,22 +179,11 @@ ARHOME: MOV     M,A                     ; GH_HOME
         XRA     A
         STA     FRUIT_ON
         STA     FRUIT_TMR
-        STA     DOT_GLOBAL
-        STA     DOT_GUSE
         STA     ELROY
         STA     GHOST_PTS
-        MVI     A,3
-        STA     LIVES
-        MVI     A,1
-        STA     LEVEL
 
-        ; PRNG seed (anything non-zero)
         LXI     H,1
         SHLD    PRNG
-
-        POP     H
-        POP     D
-        POP     B
         RET
 
 ; DE <- pointer to ACTOR_INIT + 6 + CUR_GID*6  (ghost records start at +6)
