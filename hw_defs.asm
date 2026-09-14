@@ -12,7 +12,7 @@
 ;   4. maze_data, ai_logic, render_maze, sprite_blit, and main are INCLUDEd
 ;      before the DS block so code/tables sit in the image and variables last.
 ;
-; Assemble later with:  hw_defs.asm  (this file pulls the other two in).
+; Assemble with:  python3 build.py  (reads this file; writes PACMAN.CO).
 ;==============================================================================
 
         ORG     0D000H

@@ -6,3 +6,5 @@
 *.tmp
 *.bak
 *~
+__pycache__/
+*.pyc
