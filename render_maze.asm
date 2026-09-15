@@ -307,6 +307,7 @@ RENDER_MAZE:
         DI
         CALL    LCD_CLEAR
         CALL    DRAW_WALLS              ; Excel W outlines + RP/PP in one pass
+        CALL    DRAW_HUD
         CALL    FRAME_DELAY
         RET
 
@@ -394,6 +395,29 @@ CB_EN:  CALL    EN_ON
         ORA     B
         STA     TMP1
 CB_POP: POP     B
+        LDA     FRUIT_ON
+        ORA     A
+        JZ      CB_DONE
+        LDA     TMP7
+        CPI     FRUIT_TX
+        JNZ     CB_DONE
+        LDA     TMP5
+        CPI     FRUIT_TY
+        JNZ     CB_DONE
+        PUSH    B
+        LDA     FRUIT_IDX
+        CALL    FRUIT_BMP_A
+        LDA     TMP2
+        MOV     E,A
+        MVI     D,0
+        DAD     D
+        MOV     A,M
+        CALL    SPR_TO_LCD
+        MOV     B,A
+        LDA     TMP1
+        ORA     B
+        STA     TMP1
+        POP     B
 CB_DONE:
         LDA     TMP1
         RET
@@ -457,7 +481,18 @@ ENE2:   INX     H
         XRA     A
         RET
 
-; Blit Excel W pixels + live RP/PP into LCD bytes 0..20 of every row.
+; Screen LCD byte D -> wall-pattern index 0..20.
+; CY=1 if this byte is left or right HUD (not WALL_PAT).
+SCR_TO_PAT:
+        MOV     A,D
+        SUI     MAZE_PAD
+        RC
+        CPI     WALL_BYTES
+        CMC
+        MOV     B,A
+        RET
+
+; Blit Excel W pixels + live RP/PP into LCD bytes MAZE_PAD .. MAZE_PAD+20.
 DRAW_WALLS:
         XRA     A
         STA     TMP0
@@ -465,7 +500,7 @@ DWY:    LDA     TMP0
         CPI     LCD_HEIGHT
         RNC
         MOV     C,A
-        MVI     B,0
+        MVI     B,MAZE_PAD_PX
         CALL    XY_TO_ADDR
         CALL    LCD_SET_ADDR
         MVI     A,LCD_REG_WRITE
@@ -503,9 +538,8 @@ WALL_RESTORE_BYTE:
         MOV     A,B
         CALL    DIV6
         MOV     A,D
-        CPI     WALL_BYTES
-        RNC
-        MOV     B,A
+        CALL    SCR_TO_PAT
+        RC
         CALL    COMPOSE_BYTE
         JMP     LCD_DATA
 
@@ -523,22 +557,18 @@ WALL_RESTORE_ROW:
         MOV     A,B
         CALL    DIV6                    ; D=x/6  A=x%6  C=y still
         PUSH    PSW
-        MOV     A,D
-        CPI     WALL_BYTES
-        JNC     WRR_HUD
+        CALL    SCR_TO_PAT
+        JC      WRR_HUD
         PUSH    D
-        MOV     B,A
         CALL    COMPOSE_BYTE
         CALL    LCD_DATA
         POP     D
         POP     PSW
         ORA     A
         RZ                              ; aligned: sprite lived in this byte
-        MOV     A,D
-        INR     A
-        CPI     WALL_BYTES
-        RNC
-        MOV     B,A
+        INR     D
+        CALL    SCR_TO_PAT
+        RC
         CALL    COMPOSE_BYTE
         JMP     LCD_DATA
 WRR_HUD:
@@ -572,167 +602,3 @@ WRBX:   LDA     TMP6
 WRBXD:  POP     B
         RET
 
-; Tiny plus at the fruit spawn point.
-DRAW_FRUIT:
-        MVI     B,FRUIT_X
-        MVI     C,FRUIT_Y
-        CALL    PLOT_OR
-        MVI     B,FRUIT_X
-        MVI     C,FRUIT_Y-1
-        CALL    PLOT_OR
-        MVI     B,FRUIT_X
-        MVI     C,FRUIT_Y+1
-        CALL    PLOT_OR
-        MVI     B,FRUIT_X-1
-        MVI     C,FRUIT_Y
-        CALL    PLOT_OR
-        MVI     B,FRUIT_X+1
-        MVI     C,FRUIT_Y
-        JMP     PLOT_OR
-
-; 6x6 power-pellet sprite at each live energizer tile (graphic in the middle).
-DRAW_ENERG:
-        LXI     H,ENERG_XY
-        MVI     D,0
-DE1:    MOV     A,D
-        CPI     ENERG_COUNT
-        RZ
-        LDA     ENERG_MASK
-        MOV     C,D
-        INR     C
-DEROT:  RRC
-        DCR     C
-        JNZ     DEROT
-        JNC     DE_SK
-        MOV     A,M
-        INX     H
-        CALL    TILE_TO_PX
-        MOV     B,A
-        MOV     A,M
-        INX     H
-        CALL    TILE_TO_PY
-        MOV     C,A
-        PUSH    H
-        PUSH    D
-        LXI     H,SPR_POWER
-        CALL    SPR_DRAW
-        POP     D
-        POP     H
-        JMP     DE_N
-DE_SK:  INX     H
-        INX     H
-DE_N:   INR     D
-        JMP     DE1
-
-; 6x6 regular-pellet sprite at every still-present RP tile (graphic in middle).
-DRAW_PELLETS:
-        XRA     A
-        STA     TMP0                    ; tile Y
-DPR:    LDA     TMP0
-        CPI     MAP_H
-        RNC
-        CALL    TILE_TO_PY
-        STA     TMP1
-        LDA     TMP0
-        ADD     A
-        MOV     C,A
-        LDA     TMP0
-        ADD     C                       ; *3
-        MOV     C,A
-        MVI     B,0
-        LXI     H,PELLET_BITS
-        DAD     B
-        XRA     A
-        STA     TMP2
-DPC:    LDA     TMP2
-        CPI     MAP_W
-        JZ      DPRN
-        PUSH    H
-        LDA     TMP2
-        RRC
-        RRC
-        RRC
-        ANI     03H
-        MOV     C,A
-        MVI     B,0
-        DAD     B
-        LDA     TMP2
-        ANI     07H
-        MOV     B,A
-        INR     B
-        MOV     A,M
-DPROT:  RLC
-        DCR     B
-        JNZ     DPROT
-        POP     H
-        JNC     DPSK
-        LDA     TMP2
-        CALL    TILE_TO_PX
-        MOV     B,A
-        LDA     TMP1
-        MOV     C,A
-        PUSH    H
-        LXI     H,SPR_PELLET
-        CALL    SPR_DRAW
-        POP     H
-DPSK:   LDA     TMP2
-        INR     A
-        STA     TMP2
-        JMP     DPC
-DPRN:   LDA     TMP0
-        INR     A
-        STA     TMP0
-        JMP     DPR
-
-; If tile (D=tx, E=ty) still has a pellet, draw its 6x6 sprite.
-PELLET_DOT:
-        MOV     A,E
-        STA     TMP5
-        MOV     A,D
-        STA     TMP4
-        LDA     TMP5
-        CPI     MAP_H
-        RNC
-        ADD     A
-        MOV     C,A
-        LDA     TMP5
-        ADD     C
-        MOV     C,A
-        MVI     B,0
-        LXI     H,PELLET_BITS
-        DAD     B
-        LDA     TMP4
-        RRC
-        RRC
-        RRC
-        ANI     03H
-        MOV     C,A
-        MVI     B,0
-        DAD     B
-        LDA     TMP4
-        ANI     07H
-        MOV     B,A
-        INR     B
-        MOV     A,M
-PDROT:  RLC
-        DCR     B
-        JNZ     PDROT
-        RNC
-        LDA     TMP4
-        CALL    TILE_TO_PX
-        MOV     B,A
-        LDA     TMP5
-        CALL    TILE_TO_PY
-        MOV     C,A
-        LXI     H,SPR_PELLET
-        JMP     SPR_DRAW
-
-PLOT_2X2:
-        CALL    PLOT_OR
-        INR     B
-        CALL    PLOT_OR
-        DCR     B
-        INR     C
-        CALL    PLOT_OR
-        INR     B
-        JMP     PLOT_OR

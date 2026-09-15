@@ -6,11 +6,11 @@ What this script does (beginner overview)
 -----------------------------------------
 1. Reads hw_defs.asm and follows every INCLUDE.
 2. Assembles pure 8085 Intel-syntax source (two passes).
-3. Writes PACMAN.CO with the 6-byte Tandy/Kyocera header:
+3. Writes PAC200.CO with the 6-byte Tandy/Kyocera header:
 
-      bytes 0-1  load address      (little-endian), we use 0xD000
+      bytes 0-1  load address      (little-endian), we use 0xC800
       bytes 2-3  payload length    (not counting the 6-byte header)
-      bytes 4-5  execution address (little-endian), also 0xD000
+      bytes 4-5  execution address (little-endian), also 0xC800
       bytes 6+   the machine code, including DS zeros
 
 Run it from this folder:
@@ -28,11 +28,11 @@ import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SOURCE = os.path.join(ROOT, "hw_defs.asm")
-OUTPUT = os.path.join(ROOT, "PACMAN.CO")
-LISTING = os.path.join(ROOT, "PACMAN.LST")
+OUTPUT = os.path.join(ROOT, "PAC200.CO")
+LISTING = os.path.join(ROOT, "PAC200.LST")
 
-LOAD_ADDR = 0xD000
-EXEC_ADDR = 0xD000
+LOAD_ADDR = 0xC800
+EXEC_ADDR = 0xC800
 
 # ---------------------------------------------------------------------------
 # 8085 opcode tables (Intel mnemonics, 8080-compatible encoding)
@@ -657,7 +657,7 @@ def main() -> int:
         print(f"WARNING: runtime RAM ends at ${image_end:04X} > $EE90; stack may hit reserved RAM")
     print(f"  output : {OUTPUT}")
     print(f"  listing: {LISTING}")
-    print("Done.  BASIC:  CLEAR 256,53248  then  LOADM \"PACMAN\"  then  CALL 53248")
+    print("Done.  BASIC:  CLEAR 256,51200  then  LOADM \"PAC200\"  then  CALL 51200")
     return 0
 
 

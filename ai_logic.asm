@@ -47,6 +47,8 @@ AI_RESET:
         STA     DOT_GUSE
         MVI     A,3
         STA     LIVES
+        XRA     A
+        STA     EXTRA_GOT
         MVI     A,1
         STA     LEVEL
         CALL    AI_RESET_ACTORS
@@ -72,6 +74,9 @@ ARPEL:  MOV     A,M
         STA     ENERG_LEFT
         MVI     A,0FH
         STA     ENERG_MASK
+        XRA     A
+        STA     FRUIT_ON
+        STA     FRUIT_TMR
         RET
 
 ; Board clear: refill dots, actors home, personal house clocks.
@@ -202,8 +207,6 @@ ARHOME: MOV     M,A                     ; GH_HOME
         SHLD    FRIGHT_TMR
         SHLD    FRAME_CNT
         XRA     A
-        STA     FRUIT_ON
-        STA     FRUIT_TMR
         STA     ELROY
         STA     GHOST_PTS
 

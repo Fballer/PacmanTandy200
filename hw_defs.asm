@@ -5,17 +5,17 @@
 ; NO multiply opcode -- the 8085 does not have MUL.
 ;
 ; How this file fits the project
-;   1. ORG 0D000H  -- load into the Tandy 200 high RAM bank (A000-FFFF).
+;   1. ORG 0C800H  -- HIMEM 51200; HUD needs more code than $D000 allowed.
 ;   2. On entry we snapshot BASIC's Stack Pointer so we can RET later.
 ;   3. All runtime RAM (DS) lives at the BOTTOM of this file.  Count it.
 ;      Budget: under 300 bytes.  Pellet map is 63 bytes.  No 3.8KB screen buffer.
-;   4. maze_data, ai_logic, render_maze, sprite_blit, and main are INCLUDEd
+;   4. maze_data, ai_logic, render, sprites, sound, and main are INCLUDEd
 ;      before the DS block so code/tables sit in the image and variables last.
 ;
-; Assemble with:  python3 build.py  (reads this file; writes PACMAN.CO).
+; Assemble with:  python3 build.py  (reads this file; writes PAC200.CO).
 ;==============================================================================
 
-        ORG     0D000H
+        ORG     0C800H
 
 ;==============================================================================
 ; 1. Tandy 200 / HD61830 ports
@@ -38,6 +38,11 @@ PIO_PA          EQU     0B1H            ; Port A: kbd columns 0-7, LCD, RTC
 PIO_PB          EQU     0B2H            ; Port B: kbd column 9, LCD CS, beep
 PIO_PC          EQU     0B3H            ; Port C: inputs
 KBD_ROWS        EQU     0E0H            ; keyboard row return (E0-EF same)
+
+; Piezo is PB bit5.  Bit0 MUST stay 1 (LCD chip-select).  Bit4 MUST stay 0
+; (power-off).  Do not use Model 100 port 0BAH -- that kills LCD CS here.
+PB_IDLE         EQU     01H             ; CS on, speaker off
+PB_BEEP         EQU     21H             ; CS on, speaker on
 
 BANK_PORT       EQU     0D8H            ; T200 ROM/RAM bank select (do not touch)
 
@@ -92,33 +97,35 @@ LCD_VRAM        EQU     5120            ; 40 * 128  (assembler has no MUL)
 ;==============================================================================
 ; 3. Playfield geometry  (narrower Excel 6x6 maze, on LCD bytes)
 ;------------------------------------------------------------------------------
-; Tandy 200 packs 6 pixels per VRAM byte.  Tile (0,0) is at X=6 so every
-; 6x6 wall/sprite ROW is exactly one LCD byte -- no split writes.
-; Excel: blue=wall, black=pellet, green=HUD.  19x21 tiles + 1px border.
-; Left green margin x=0..4, border x=5, maze x=6..119, border x=120,
-; green HUD x=121..239.  Divider at x=126 (byte 21).
+; Tandy 200 packs 6 pixels per VRAM byte.  Tile (0,0) X is a multiple of 6
+; so each on-grid 6x6 sprite ROW is exactly one LCD byte (no split write).
+; Left HUD is 3 LCD bytes (x=0..17): level digits + fruit queue at x=6.
+; WALL_PAT (21 bytes) is blitted at byte MAZE_PAD, then right HUD.
 ;------------------------------------------------------------------------------
 PF_W            EQU     118             ; maze pixels (2px border + 19*6)
 PF_H            EQU     128
-HUD_W           EQU     114             ; 240-126
-HUD_X           EQU     126             ; first HUD pixel (21*6, byte aligned)
+MAZE_PAD        EQU     3               ; left HUD LCD bytes; 18 px
+MAZE_PAD_PX     EQU     18              ; MAZE_PAD * 6
+HUD_X           EQU     144             ; first right-HUD pixel (byte 24)
+HUD_W           EQU     96              ; 240-144; strings are centered here
+LIVES_MAX       EQU     5
 
 TILE            EQU     6               ; 6x6 tiles = one LCD byte wide
 MAP_W           EQU     19              ; Excel interior (two tiles narrower)
 MAP_H           EQU     21
-MAZE_X0         EQU     6               ; tile (0,0) pixel X  (6 % 6 == 0)
+MAZE_X0         EQU     24              ; tile (0,0): old 6 + 18, %6==0
 MAZE_Y0         EQU     1               ; tile (0,0) pixel Y
-BORDER_X0       EQU     4               ; extra 2-pixel wall on the left
-BORDER_X1       EQU     121             ; extra 2-pixel wall on the right
+BORDER_X0       EQU     22              ; extra 2-pixel wall on the left
+BORDER_X1       EQU     139             ; extra 2-pixel wall on the right
 PEL_OX          EQU     2               ; 2x2 pellet offset inside a tile
 PEL_OY          EQU     2
 
-; Warp tunnels: tile row 9, pixel Y=55..60, wrap sprite X=6 <-> 114
+; Warp tunnels: tile row 9, pixel Y=55..60, wrap sprite X=24 <-> 132
 TUN_TY          EQU     9
 TUN_Y0          EQU     55
 TUN_Y1          EQU     60
-PF_XMAX         EQU     114             ; last tile's top-left X (tile 18)
-PF_XWRAP        EQU     115             ; one pixel past last tile -> wrap to 6
+PF_XMAX         EQU     132             ; last tile's top-left X (tile 18)
+PF_XWRAP        EQU     133             ; one pixel past last tile -> wrap to 24
 
 ; Ghost house tiles (gate is (9,8), interior (7..11, 9..10))
 HOUSE_TX0       EQU     7
@@ -127,7 +134,7 @@ HOUSE_TY0       EQU     8
 HOUSE_TY1       EQU     10
 GATE_TX         EQU     9
 GATE_TY         EQU     8
-GATE_X          EQU     60              ; MAZE_X0 + 9*6
+GATE_X          EQU     78              ; MAZE_X0 + 9*6
 GATE_Y          EQU     49              ; MAZE_Y0 + 8*6
 GATE_W          EQU     6
 
@@ -136,25 +143,25 @@ FORBID_TY       EQU     7
 FORBID_TX0      EQU     8
 FORBID_TX1      EQU     10
 
-; Fruit: tile (9,12) open slot under the house.  Plus at origin+(2,2).
+; Fruit: tile (9,12) open slot under the house.  6x6, byte-aligned.
 FRUIT_TX        EQU     9
 FRUIT_TY        EQU     12
-FRUIT_X         EQU     62
-FRUIT_Y         EQU     75
+FRUIT_X         EQU     78              ; MAZE_X0 + 9*6
+FRUIT_Y         EQU     73              ; MAZE_Y0 + 12*6
 
 ; Actor positions are sprite TOP-LEFT (6x6 fills the tile when aligned).
 PAC_START_TX    EQU     9
 PAC_START_TY    EQU     16              ; under the T on the energizer row
-PAC_START_X     EQU     60
+PAC_START_X     EQU     78
 PAC_START_Y     EQU     97
 
-BLINKY_X0       EQU     60              ; tile (9,7) above the gate
+BLINKY_X0       EQU     78              ; tile (9,7) above the gate
 BLINKY_Y0       EQU     43
-PINKY_X0        EQU     60              ; tile (9,10) house center
+PINKY_X0        EQU     78              ; tile (9,10) house center
 PINKY_Y0        EQU     61
-INKY_X0         EQU     54              ; tile (8,10)
+INKY_X0         EQU     72              ; tile (8,10)
 INKY_Y0         EQU     61
-CLYDE_X0        EQU     66              ; tile (10,10)
+CLYDE_X0        EQU     84              ; tile (10,10)
 CLYDE_Y0        EQU     61
 
 ;==============================================================================
@@ -255,12 +262,26 @@ START:  DI
 
         CALL    KBD_INIT                ; PA/PB directions, col9 off, VT keyscan
         CALL    LCD_INIT_GFX            ; graphics mode, known registers
+        LXI     H,HISCORE               ; default top score 10,000
+        XRA     A
+        MOV     M,A
+        INX     H
+        MOV     M,A
+        INX     H
+        MVI     M,01H
         CALL    AI_RESET                ; ghosts, timers, pellet RAM copy
-        CALL    RENDER_MAZE             ; Phase 2: stroke walls + pellets
-        CALL    SPRITES_INIT            ; Phase 2: 6x6 dirty-rect first paint
-        CALL    WAIT_START              ; SPACE, then draw GO, then run
-        CALL    GAME_LOOP               ; Phase 3: until reset
-        JMP     EXIT
+        CALL    RENDER_MAZE             ; first game only: clear + walls + HUD
+        CALL    SPRITES_INIT
+PLAY_WAIT:
+        CALL    WAIT_START              ; PRESS ANY KEY in the lives slot
+        CALL    GAME_LOOP               ; Phase 3: until Q or BREAK
+        LDA     GAME_STATE
+        CPI     GST_REPLAY
+        JNZ     EXIT
+        CALL    AI_RESET
+        CALL    BOARD_SOFT              ; keep HUDs; pellets + left HUD + score
+        CALL    SPRITES_INIT
+        JMP     PLAY_WAIT
 
 ;------------------------------------------------------------------------------
 ; Clean return to BASIC.
@@ -450,6 +471,8 @@ MANHATTAN:
         INCLUDE ai_logic.asm
         INCLUDE render_maze.asm
         INCLUDE sprite_blit.asm
+        INCLUDE sound_data.asm
+        INCLUDE sound_engine.asm
         INCLUDE main.asm
 
 ;==============================================================================
@@ -493,7 +516,12 @@ FRUIT_ON:       DS      1
 FRUIT_IDX:      DS      1
 
 SCORE:          DS      3               ; packed BCD, 6 digits
+HISCORE:        DS      3               ; best this session; default 10000
+SCORE_SHOWN:    DS      3
+HUD_LV:         DS      1               ; last drawn LIVES
+HUD_LL:         DS      1               ; last drawn LEVEL
 LIVES:          DS      1
+EXTRA_GOT:      DS      1               ; 1 after the 10,000 extra man
 LEVEL:          DS      1
 PELLET_LEFT:    DS      1
 ENERG_LEFT:     DS      1

@@ -19,15 +19,19 @@
 ; added with DAA.  There is no HUD font yet; SCORE is in RAM for Phase 4.
 ;==============================================================================
 
-FRUIT_TICKS     EQU     90              ; fruit visible time
-FRUIT_DOT1      EQU     50              ; first fruit after this many pellets
-FRUIT_DOT2      EQU     100             ; second fruit
+FRUIT_TICKS     EQU     180             ; fruit visible time (game ticks)
+FRUIT_DOT1      EQU     70              ; first fruit after this many pellets
+FRUIT_DOT2      EQU     170             ; second fruit
 CLR_PELLET      EQU     1
 CLR_ENERG       EQU     2
 CLR_FRUIT       EQU     3
 
 GST_PLAY        EQU     0
 GST_OVER        EQU     1
+GST_REPLAY      EQU     2
+
+FRUIT_MAX       EQU     10              ; left HUD queue (6px + 4px gap)
+FRUIT_Y0        EQU     22
 
 ;==============================================================================
 ; GAME_LOOP -- does not return until BREAK.  START JMPs here, then EXIT.
@@ -40,10 +44,13 @@ GST_OVER        EQU     1
 T200_KSCAN      EQU     0FD0EH          ; VirtualT T200 ROM keyscan mirror
 
 WAIT_START:
+        CALL    HUD_CLR_SLOT
         LXI     H,MSG_PRESS
-        MVI     B,126                   ; HUD, byte-aligned
-        MVI     C,8
-        CALL    DRAW_STR
+        MVI     C,78
+        CALL    HUD_CSTR
+        LXI     H,MSG_BEGIN
+        MVI     C,88
+        CALL    HUD_CSTR
 WSIDL:  CALL    POLL_KEYS               ; wait until no false/stuck keys
         LDA     KEY_FLAGS
         ANI     01FH
@@ -52,17 +59,9 @@ WSLP:   CALL    POLL_KEYS
         LDA     KEY_FLAGS
         ANI     01FH                    ; space or any direction
         JZ      WSLP
-WSOK:   LXI     H,MSG_GO
-        MVI     B,126
-        MVI     C,24
-        CALL    DRAW_STR
-        MVI     B,8                     ; brief hold so GO is visible
-WSDLY:  PUSH    B
-        CALL    FRAME_DELAY
-        POP     B
-        DCR     B
-        JNZ     WSDLY
-        JMP     READY_BEEP              ; beep, beep, long beep, then play
+WSOK:   CALL    HUD_CLR_SLOT
+        CALL    HUD_LIFE_CHROME
+        JMP     PLAY_INTRO              ; four-bar jingle, then the maze runs
 
 ; 8155 PA/PB as outputs.  PB bit0=1 so column 9 is NOT selected (otherwise
 ; IN E0 ignores every Port A strobe).  PB bit4 must stay 0 (power-off).
@@ -82,62 +81,6 @@ KSEED:  MOV     M,A
         INX     H
         DCR     B
         JNZ     KSEED
-        RET
-
-; Ready count: short, short, long on 8155 PB bit 5.  Bit 0 stays 1 (LCD
-; CS).  Bit 4 stays 0 (power).  No IN of PA/PB -- VirtualT has no latch.
-PB_IDLE         EQU     01H
-PB_BEEP         EQU     21H             ; CS + speaker
-
-READY_BEEP:
-        PUSH    B
-        PUSH    D
-        MVI     D,2
-RBS:    MVI     B,70H                   ; short chirp
-        MVI     C,40H
-        CALL    TONE_PB
-        CALL    BEEP_REST
-        DCR     D
-        JNZ     RBS
-        MVI     B,0E0H                  ; long
-        MVI     C,50H                   ; slightly lower
-        CALL    TONE_PB
-        CALL    BEEP_REST
-        POP     D
-        POP     B
-        RET
-
-; B = half-cycles, C = delay per half.  Ends with speaker off.
-TONE_PB:
-        PUSH    B
-TN1:    MVI     A,PB_BEEP
-        OUT     PIO_PB
-        CALL    TONE_DLY
-        MVI     A,PB_IDLE
-        OUT     PIO_PB
-        CALL    TONE_DLY
-        DCR     B
-        JNZ     TN1
-        POP     B
-        RET
-
-TONE_DLY:
-        PUSH    B
-        MOV     B,C
-TND:    DCR     B
-        JNZ     TND
-        POP     B
-        RET
-
-BEEP_REST:
-        PUSH    B
-        MVI     B,30H
-BR1:    MVI     C,0
-BR2:    DCR     C
-        JNZ     BR2
-        DCR     B
-        JNZ     BR1
-        POP     B
         RET
 
 ; Hold the column strobe so VirtualT has time to sample the matrix.
@@ -330,6 +273,70 @@ DRAW_STR:
         POP     H
         JMP     DRAW_STR
 
+; Center HL's 0FFH-terminated string in the right HUD.  C = y.
+HUD_CSTR:
+        PUSH    H
+        PUSH    B
+        MVI     D,0
+HCC:    MOV     A,M
+        CPI     0FFH
+        JZ      HCD
+        INX     H
+        INR     D
+        JMP     HCC
+HCD:    MOV     A,D
+        ADD     A
+        ADD     D
+        ADD     A                       ; n*6
+        MOV     B,A
+        MVI     A,HUD_W
+        SUB     B
+        RRC
+        ADI     HUD_X
+        POP     B
+        MOV     B,A
+        POP     H
+        JMP     DRAW_STR
+
+; Blank the lives slot (label + icons) in the right HUD.
+HUD_CLR_SLOT:
+        MVI     C,78
+        CALL    HUD_CLR_LINE
+        MVI     C,88
+        JMP     HUD_CLR_LINE
+HUD_CLR_LINE:
+        MVI     B,HUD_X
+        MVI     D,16
+        MVI     E,8
+        JMP     HUD_CLR_RECT
+
+; B=x C=y D=LCD bytes E=rows.  Writes zeros (no RMW).
+HUD_CLR_RECT:
+        MOV     A,D
+        STA     TMP0
+        MOV     A,E
+        STA     TMP1
+HCRY:   LDA     TMP1
+        ORA     A
+        RZ
+        PUSH    B
+        CALL    XY_TO_ADDR
+        CALL    LCD_SET_ADDR
+        MVI     A,LCD_REG_WRITE
+        CALL    LCD_CMD
+        LDA     TMP0
+        MOV     D,A
+HCRB:   XRA     A
+        CALL    LCD_DATA
+        DCR     D
+        JNZ     HCRB
+        POP     B
+        INR     C
+        LDA     TMP1
+        DCR     A
+        STA     TMP1
+        JMP     HCRY
+
 ; A = glyph index, B = x, C = y.  Bit 7 of each font byte = leftmost.
 DRAW_GLYPH:
         STA     TMP0
@@ -392,26 +399,707 @@ DGRN:   LDA     TMP6
         STA     TMP6
         JMP     DGROW
 
-; 0=sp 1=A 2=C 3=E 4=G 5=O 6=P 7=R 8=S 9=M 10=V   (5x7, bit7=left)
+; 0-9 digits, 10=space, then letters / punct.  5x7, bit7=left.
 FONT5:
+        DB      070H,088H,098H,0A8H,0C8H,088H,070H   ; 0
+        DB      020H,060H,020H,020H,020H,020H,070H   ; 1
+        DB      070H,088H,008H,010H,020H,040H,0F8H   ; 2
+        DB      070H,088H,008H,030H,008H,088H,070H   ; 3
+        DB      010H,030H,050H,090H,0F8H,010H,010H   ; 4
+        DB      0F8H,080H,0F0H,008H,008H,088H,070H   ; 5
+        DB      070H,080H,080H,0F0H,088H,088H,070H   ; 6
+        DB      0F8H,008H,010H,020H,040H,040H,040H   ; 7
+        DB      070H,088H,088H,070H,088H,088H,070H   ; 8
+        DB      070H,088H,088H,078H,008H,008H,070H   ; 9
         DB      000H,000H,000H,000H,000H,000H,000H   ; space
         DB      070H,088H,088H,0F8H,088H,088H,088H   ; A
+        DB      0F0H,088H,088H,0F0H,088H,088H,0F0H   ; B
         DB      070H,088H,080H,080H,080H,088H,070H   ; C
+        DB      0E0H,090H,088H,088H,088H,090H,0E0H   ; D
         DB      0F8H,080H,080H,0F0H,080H,080H,0F8H   ; E
         DB      070H,088H,080H,0B8H,088H,088H,070H   ; G
+        DB      080H,080H,080H,080H,080H,080H,0F8H   ; L
+        DB      088H,0D8H,0A8H,088H,088H,088H,088H   ; M
+        DB      088H,0C8H,0A8H,098H,088H,088H,088H   ; N
         DB      070H,088H,088H,088H,088H,088H,070H   ; O
         DB      0F0H,088H,088H,0F0H,080H,080H,080H   ; P
         DB      0F0H,088H,088H,0F0H,0A0H,090H,088H   ; R
         DB      078H,080H,080H,070H,008H,008H,0F0H   ; S
-        DB      088H,0D8H,0A8H,088H,088H,088H,088H   ; M
-        DB      088H,088H,088H,050H,050H,020H,020H   ; V
+        DB      0F8H,020H,020H,020H,020H,020H,020H   ; T
+        DB      088H,088H,088H,088H,050H,050H,020H   ; V
+        DB      088H,088H,050H,020H,020H,020H,020H   ; Y
+        DB      000H,000H,000H,0F8H,000H,000H,000H   ; -
+        DB      000H,020H,020H,000H,020H,020H,000H   ; :
+        DB      010H,020H,040H,040H,040H,020H,010H   ; (
+        DB      040H,020H,010H,010H,010H,020H,040H   ; )
+        DB      070H,020H,020H,020H,020H,020H,070H   ; I
+        DB      0F8H,080H,080H,0F0H,080H,080H,080H   ; F
+        DB      088H,090H,0A0H,0C0H,0A0H,090H,088H   ; K
+        DB      070H,088H,088H,088H,0A8H,090H,068H   ; Q
+        DB      088H,088H,088H,088H,088H,088H,070H   ; U
+        DB      000H,000H,0F8H,000H,0F8H,000H,000H   ; =
 
+FG_SP   EQU     10
+FG_A    EQU     11
+FG_B    EQU     12
+FG_C    EQU     13
+FG_D    EQU     14
+FG_E    EQU     15
+FG_G    EQU     16
+FG_L    EQU     17
+FG_M    EQU     18
+FG_N    EQU     19
+FG_O    EQU     20
+FG_P    EQU     21
+FG_R    EQU     22
+FG_S    EQU     23
+FG_T    EQU     24
+FG_V    EQU     25
+FG_Y    EQU     26
+FG_MIN  EQU     27
+FG_COL  EQU     28
+FG_LP   EQU     29
+FG_RP   EQU     30
+FG_I    EQU     31
+FG_F    EQU     32
+FG_K    EQU     33
+FG_Q    EQU     34
+FG_U    EQU     35
+FG_EQ   EQU     36
+
+MSG_TITLE:
+        DB      FG_P,FG_O,FG_R,FG_T,FG_A,FG_SP
+        DB      FG_P,FG_A,FG_C,FG_MIN,2,0,0,0FFH
+MSG_BY:
+        DB      FG_B,FG_Y,FG_SP,FG_P,FG_O,FG_R,FG_T,FG_A,FG_MIN
+        DB      FG_C,FG_O,FG_C,FG_O,0FFH
+MSG_CR:
+        DB      FG_LP,FG_C,FG_RP,FG_SP,2,0,2,6,0FFH
+MSG_TOP:
+        DB      FG_T,FG_O,FG_P,FG_SP,FG_S,FG_C,FG_O,FG_R,FG_E,0FFH
+MSG_LIVES:
+        DB      FG_L,FG_I,FG_V,FG_E,FG_S,FG_SP
+        DB      FG_L,FG_E,FG_F,FG_T,FG_COL,0FFH
 MSG_PRESS:
-        DB      6,7,3,8,8,0,8,6,1,2,3,0FFH   ; PRESS SPACE
-MSG_GO:
-        DB      4,5,0FFH                     ; GO
+        DB      FG_P,FG_R,FG_E,FG_S,FG_S,FG_SP
+        DB      FG_A,FG_N,FG_Y,FG_SP,FG_K,FG_E,FG_Y,0FFH
+MSG_BEGIN:
+        DB      FG_T,FG_O,FG_SP,FG_B,FG_E,FG_G,FG_I,FG_N,0FFH
 MSG_OVER:
-        DB      4,1,9,3,0,5,10,3,7,0FFH      ; GAME OVER
+        DB      FG_G,FG_A,FG_M,FG_E,FG_SP,FG_O,FG_V,FG_E,FG_R,0FFH
+MSG_RQ:
+        DB      FG_R,FG_EQ,FG_R,FG_E,FG_P,FG_L,FG_A,FG_Y,FG_SP
+        DB      FG_Q,FG_EQ,FG_Q,FG_U,FG_I,FG_T,0FFH
+
+; 18x5 "LEVEL" in LCD bytes (bit0=left), including the 1px box sides.
+PAT_LEVEL:
+        DB      025H,037H,027H
+        DB      025H,034H,024H
+        DB      025H,035H,025H
+        DB      025H,028H,024H
+        DB      03DH,02BH,03FH
+
+; Right + left HUD.  Maze and HUD x are multiples of 6 (one LCD byte / glyph).
+DRAW_HUD:
+        CALL    HUD_LVLBOX
+        LXI     H,MSG_TITLE
+        MVI     C,2
+        CALL    HUD_CSTR
+        LXI     H,MSG_BY
+        MVI     C,12
+        CALL    HUD_CSTR
+        LXI     H,MSG_CR
+        MVI     C,22
+        CALL    HUD_CSTR
+        CALL    HUD_SBOX
+        LXI     H,MSG_TOP
+        MVI     C,110
+        CALL    HUD_CSTR
+        CALL    HUD_BOX
+        MVI     A,0FFH
+        STA     HUD_LV
+        STA     HUD_LL
+        STA     SCORE_SHOWN
+        STA     SCORE_SHOWN+1
+        STA     SCORE_SHOWN+2
+        CALL    HUD_HISCORE
+        JMP     HUD_LIVE
+
+; Lives/level only when they change.  Score: only the digits that changed.
+HUD_UPDATE:
+        LDA     LIVES
+        MOV     B,A
+        LDA     HUD_LV
+        CMP     B
+        JZ      HU1
+        MOV     A,B
+        STA     HUD_LV
+        CALL    HUD_LIVES
+HU1:    LDA     LEVEL
+        MOV     B,A
+        LDA     HUD_LL
+        CMP     B
+        JZ      HU2
+        MOV     A,B
+        STA     HUD_LL
+        CALL    HUD_LVLDIG
+        CALL    HUD_FRUITS
+HU2:    JMP     HUD_SCORE
+
+HUD_LIVE:
+        LDA     LIVES
+        STA     HUD_LV
+        LDA     LEVEL
+        STA     HUD_LL
+        CALL    HUD_LVLDIG
+        CALL    HUD_FRUITS
+        CALL    HUD_LIFE_CHROME
+        JMP     HUD_SCORE
+
+SCORE_X         EQU     174
+SCORE_Y         EQU     48
+
+; Packed BCD, 6 digits.  Each glyph sits in one LCD byte (x%6==0), so a
+; pellet that only bumps tens is one glyph: 7 byte writes, no PLOT_OR.
+HUD_SCORE:
+        LDA     SCORE
+        MOV     B,A
+        LDA     SCORE_SHOWN
+        CMP     B
+        JNZ     HSDGO
+        LDA     SCORE+1
+        MOV     B,A
+        LDA     SCORE_SHOWN+1
+        CMP     B
+        JNZ     HSDGO
+        LDA     SCORE+2
+        MOV     B,A
+        LDA     SCORE_SHOWN+2
+        CMP     B
+        RZ
+HSDGO:  XRA     A
+        STA     TMP1
+HSDL:   LDA     TMP1
+        CPI     6
+        JZ      HSDCP
+        LXI     H,SCORE
+        CALL    BCD_NIB
+        MOV     C,A
+        LXI     H,SCORE_SHOWN
+        CALL    BCD_NIB
+        CMP     C
+        JZ      HSDN
+        MOV     A,C
+        CALL    DIGIT_BLIT
+HSDN:   LDA     TMP1
+        INR     A
+        STA     TMP1
+        JMP     HSDL
+HSDCP:  LDA     SCORE
+        STA     SCORE_SHOWN
+        LDA     SCORE+1
+        STA     SCORE_SHOWN+1
+        LDA     SCORE+2
+        STA     SCORE_SHOWN+2
+        RET
+
+; TMP1 = 0..5 left-to-right, HL -> 3-byte LE BCD.  A = that nibble.
+BCD_NIB:
+        LDA     TMP1
+        ANI     0FEH
+        RRC
+        CMA
+        ADI     3
+        MOV     E,A
+        MVI     D,0
+        DAD     D
+        MOV     A,M
+        MOV     B,A
+        LDA     TMP1
+        ANI     01H
+        JNZ     BNLO
+        MOV     A,B
+        RRC
+        RRC
+        RRC
+        RRC
+        ANI     0FH
+        RET
+BNLO:   MOV     A,B
+        ANI     0FH
+        RET
+
+; A = 0..9, TMP1 = slot 0..5.  Writes 7 LCD bytes at SCORE_X+slot*6, SCORE_Y.
+DIGIT_BLIT:
+        STA     TMP0
+        LDA     TMP1
+        ADD     A
+        MOV     B,A
+        ADD     A
+        ADD     B
+        ADI     SCORE_X
+        STA     TMP3
+        XRA     A
+        STA     TMP6
+DBROW:  LDA     TMP6
+        CPI     7
+        RNC
+        LDA     TMP0
+        CALL    FONT_ROW
+        MOV     D,A
+        LDA     TMP3
+        MOV     B,A
+        MVI     C,SCORE_Y
+        LDA     TMP6
+        ADD     C
+        MOV     C,A
+        PUSH    D
+        CALL    XY_TO_ADDR
+        CALL    LCD_SET_ADDR
+        MVI     A,LCD_REG_WRITE
+        CALL    LCD_CMD
+        POP     D
+        MOV     A,D
+        CALL    LCD_DATA
+        LDA     TMP6
+        INR     A
+        STA     TMP6
+        JMP     DBROW
+
+HUD_HISCORE:
+        MVI     B,174
+        MVI     C,118
+        MVI     D,6
+        MVI     E,7
+        CALL    HUD_CLR_RECT
+        MVI     B,174
+        MVI     C,118
+        LXI     H,HISCORE
+        JMP     DRAW_BCD6
+
+DRAW_DEC2:
+        PUSH    B
+        MOV     D,A
+        MVI     E,0
+D2T:    MOV     A,D
+        CPI     10
+        JC      D2O
+        SUI     10
+        MOV     D,A
+        INR     E
+        JMP     D2T
+D2O:    MOV     A,E
+        POP     B
+        PUSH    B
+        PUSH    D
+        CALL    DRAW_GLYPH
+        POP     D
+        POP     B
+        MOV     A,B
+        ADI     6
+        MOV     B,A
+        MOV     A,D
+        JMP     DRAW_GLYPH
+
+DRAW_BCD6:
+        INX     H
+        INX     H
+        MVI     D,3
+BCD6:   PUSH    D
+        PUSH    H
+        MOV     A,M
+        RRC
+        RRC
+        RRC
+        RRC
+        ANI     0FH
+        PUSH    B
+        CALL    DRAW_GLYPH
+        POP     B
+        MOV     A,B
+        ADI     6
+        MOV     B,A
+        POP     H
+        MOV     A,M
+        ANI     0FH
+        PUSH    H
+        PUSH    B
+        CALL    DRAW_GLYPH
+        POP     B
+        MOV     A,B
+        ADI     6
+        MOV     B,A
+        POP     H
+        DCX     H
+        POP     D
+        DCR     D
+        JNZ     BCD6
+        RET
+
+; Left HUD: boxed 3x5 "LEVEL", underline, two digits.  Then fruit queue.
+HUD_LVLBOX:
+        XRA     A
+        MOV     B,A
+        MOV     C,A
+        MVI     D,18
+        MVI     E,18
+        CALL    HUD_RECT
+        MVI     C,2
+        LXI     H,PAT_LEVEL
+        MVI     D,5
+PL1:    PUSH    D
+        PUSH    H
+        MVI     B,0
+        CALL    XY_TO_ADDR
+        CALL    LCD_SET_ADDR
+        MVI     A,LCD_REG_WRITE
+        CALL    LCD_CMD
+        POP     H
+        MOV     A,M
+        INX     H
+        CALL    LCD_DATA
+        MOV     A,M
+        INX     H
+        CALL    LCD_DATA
+        MOV     A,M
+        INX     H
+        CALL    LCD_DATA
+        INR     C
+        POP     D
+        DCR     D
+        JNZ     PL1
+        MVI     B,2
+        MVI     C,8
+        MVI     D,14
+        JMP     HUD_HLINE
+
+HUD_LVLDIG:
+        LDA     LEVEL
+        MOV     D,A
+        MVI     E,0
+LDT:    MOV     A,D
+        CPI     10
+        JC      LDO
+        SUI     10
+        MOV     D,A
+        INR     E
+        JMP     LDT
+LDO:    MOV     A,E
+        STA     TMP0
+        MOV     A,D
+        STA     TMP7
+        XRA     A
+        STA     TMP6
+LLR:    LDA     TMP6
+        CPI     7
+        RNC
+        MVI     B,0
+        MVI     C,10
+        ADD     C
+        MOV     C,A
+        CALL    XY_TO_ADDR
+        CALL    LCD_SET_ADDR
+        MVI     A,LCD_REG_WRITE
+        CALL    LCD_CMD
+        ; Tens at x=3, ones at x=9 (12px block centered in the 18px box).
+        LDA     TMP0
+        CALL    FONT_ROW
+        MOV     D,A
+        ADD     A
+        ADD     A
+        ADD     A                       ; <<3 into bits 3-5
+        ANI     3FH
+        ORI     01H                     ; left wall
+        CALL    LCD_DATA
+        MOV     A,D
+        RRC
+        RRC
+        RRC
+        ANI     03H                     ; tens tail at x=6,7
+        MOV     E,A
+        LDA     TMP7
+        CALL    FONT_ROW
+        MOV     D,A
+        ADD     A
+        ADD     A
+        ADD     A
+        ANI     3FH
+        ORA     E
+        CALL    LCD_DATA
+        MOV     A,D
+        RRC
+        RRC
+        RRC
+        ANI     03H
+        ORI     20H                     ; right wall
+        CALL    LCD_DATA
+        LDA     TMP6
+        INR     A
+        STA     TMP6
+        JMP     LLR
+
+; A = digit 0-9, TMP6 = row 0-6.  A = LCD bits for that glyph row.
+FONT_ROW:
+        MOV     B,A
+        ADD     A
+        ADD     A
+        ADD     B
+        ADD     B
+        ADD     B
+        MOV     E,A
+        LDA     TMP6
+        ADD     E
+        MOV     E,A
+        MVI     D,0
+        LXI     H,FONT5
+        DAD     D
+        MOV     A,M
+        JMP     SPR_TO_LCD
+
+HUD_LIFE_CHROME:
+        LXI     H,MSG_LIVES
+        MVI     C,78
+        CALL    HUD_CSTR
+        LDA     LIVES
+        STA     HUD_LV
+        JMP     HUD_LIVES
+
+HUD_LIVES:
+        MVI     B,162
+        MVI     C,88
+        MVI     D,10
+        MVI     E,6
+        CALL    HUD_CLR_RECT
+        LDA     LIVES
+        ORA     A
+        RZ
+        MOV     B,A
+        ADD     A
+        ADD     B
+        ADD     A
+        ADD     A                       ; *12
+        SUI     6                       ; group width
+        MOV     B,A
+        MVI     A,HUD_W
+        SUB     B
+        RRC
+        ADI     HUD_X
+        STA     TMP0
+        CALL    DIV6
+        MOV     C,A                     ; x%6
+        LDA     TMP0
+        SUB     C
+        MOV     B,A
+        MVI     C,88
+        LDA     LIVES
+        MOV     D,A
+HL1:    PUSH    B
+        PUSH    D
+        LXI     H,SPR_PAC
+        CALL    SPR_DRAW
+        POP     D
+        POP     B
+        MOV     A,B
+        ADI     12
+        MOV     B,A
+        DCR     D
+        JNZ     HL1
+        RET
+
+; Up to FRUIT_MAX level fruits under the LEVEL box.  Oldest on top.
+HUD_FRUITS:
+        LDA     LEVEL
+        MOV     D,A
+        CPI     FRUIT_MAX+1
+        JC      HFN0
+        MVI     A,FRUIT_MAX
+        JMP     HFN1
+HFN0:   MOV     A,D
+HFN1:   MOV     E,A
+        LDA     LEVEL
+        SUB     E
+        INR     A
+        MOV     D,A
+        XRA     A
+        STA     TMP1
+HFF:    LDA     TMP1
+        ADD     A
+        MOV     B,A
+        ADD     A
+        ADD     A
+        ADD     B                       ; *10
+        ADI     FRUIT_Y0
+        MOV     C,A
+        MVI     B,6
+        PUSH    D
+        CALL    HUD_CLR6
+        POP     D
+        LDA     TMP1
+        CMP     E
+        JNC     HFNX
+        MOV     A,D
+        PUSH    D
+        CALL    FRUIT_KIND_A
+        CALL    FRUIT_BMP_A
+        LDA     TMP1
+        ADD     A
+        MOV     B,A
+        ADD     A
+        ADD     A
+        ADD     B
+        ADI     FRUIT_Y0
+        MOV     C,A
+        MVI     B,6
+        CALL    SPR_DRAW
+        POP     D
+        INR     D
+HFNX:   LDA     TMP1
+        INR     A
+        STA     TMP1
+        CPI     FRUIT_MAX
+        JNZ     HFF
+        RET
+
+HUD_CLR6:
+        MVI     D,6
+HC6:    PUSH    B
+        PUSH    D
+        CALL    XY_TO_ADDR
+        CALL    LCD_SET_ADDR
+        MVI     A,LCD_REG_WRITE
+        CALL    LCD_CMD
+        XRA     A
+        CALL    LCD_DATA
+        POP     D
+        POP     B
+        INR     C
+        DCR     D
+        JNZ     HC6
+        RET
+
+; Double-lined box around the running score (centered in the right HUD).
+HUD_SBOX:
+        MVI     B,168
+        MVI     C,42
+        MVI     D,48
+        MVI     E,21
+        CALL    HUD_RECT
+        MVI     B,170
+        MVI     C,44
+        MVI     D,44
+        MVI     E,17
+        JMP     HUD_RECT
+
+HUD_RECT:
+        PUSH    B
+        PUSH    D
+        CALL    HUD_HLINE
+        POP     D
+        POP     B
+        PUSH    B
+        PUSH    D
+        MOV     A,C
+        ADD     E
+        DCR     A
+        MOV     C,A
+        CALL    HUD_HLINE
+        POP     D
+        POP     B
+        PUSH    B
+        PUSH    D
+        MOV     A,E
+        MOV     D,A
+        CALL    HUD_VLINE
+        POP     D
+        POP     B
+        MOV     A,B
+        ADD     D
+        DCR     A
+        MOV     B,A
+        MOV     A,E
+        MOV     D,A
+        JMP     HUD_VLINE
+
+HUD_BOX:
+        MVI     B,162
+        MVI     C,108
+        MVI     D,60
+        MVI     E,19
+        JMP     HUD_RECT
+
+HUD_HLINE:
+        MOV     A,D
+        ORA     A
+        RZ
+        PUSH    B
+        PUSH    D
+        CALL    PLOT_OR
+        POP     D
+        POP     B
+        INR     B
+        DCR     D
+        JMP     HUD_HLINE
+
+HUD_VLINE:
+        MOV     A,D
+        ORA     A
+        RZ
+        PUSH    B
+        PUSH    D
+        CALL    PLOT_OR
+        POP     D
+        POP     B
+        INR     C
+        DCR     D
+        JMP     HUD_VLINE
+
+HISCORE_TRY:
+        JMP     EXTRA_TRY
+
+; Copy SCORE into HISCORE and redraw the box if this game beat it.
+; Call only after GAME OVER -- not during play.
+HISCORE_COMMIT:
+        LDA     SCORE+2
+        MOV     B,A
+        LDA     HISCORE+2
+        CMP     B
+        JC      HS_UPD
+        RNZ
+        LDA     SCORE+1
+        MOV     B,A
+        LDA     HISCORE+1
+        CMP     B
+        JC      HS_UPD
+        RNZ
+        LDA     SCORE
+        MOV     B,A
+        LDA     HISCORE
+        CMP     B
+        RNC
+HS_UPD: LDA     SCORE
+        STA     HISCORE
+        LDA     SCORE+1
+        STA     HISCORE+1
+        LDA     SCORE+2
+        STA     HISCORE+2
+        JMP     HUD_HISCORE
+
+; One extra man the first time SCORE reaches 10,000.
+EXTRA_TRY:
+        LDA     EXTRA_GOT
+        ORA     A
+        RNZ
+        LDA     SCORE+2
+        ORA     A
+        RZ
+        MVI     A,1
+        STA     EXTRA_GOT
+        LDA     LIVES
+        CPI     LIVES_MAX
+        RNC
+        INR     A
+        STA     LIVES
+        RET
 
 ; After GO: steer + Pac + eat pellets (COMPOSE omits eaten bits).
 GAME_LOOP:
@@ -424,6 +1112,8 @@ GLTICK: CALL    POLL_PLAY
         CALL    PAC_MOVE
         CALL    PELLET_TRY
         CALL    ENERG_TRY
+        CALL    FRUIT_TRY
+        CALL    FRUIT_TICK
         CALL    CHECK_BOARD             ; empty maze -> next round
         CALL    AI_TICK                 ; all four think+step
         XRA     A
@@ -436,6 +1126,7 @@ GLGH:   CALL    GHOST_REDRAW
         JNZ     GLGH
         CALL    PAC_REDRAW              ; Pac last (complete chew)
         CALL    GHOST_HIT               ; same tile: eat if blue, else a life
+        CALL    HUD_UPDATE
         LDA     GAME_STATE
         CPI     GST_OVER
         JZ      GAME_OVER
@@ -445,24 +1136,38 @@ GLGH:   CALL    GHOST_REDRAW
         CALL    SPRITES_INIT            ; actors already home
         XRA     A
         STA     GAME_STATE
-        CALL    READY_BEEP              ; same ready count as a new game
 GLPACE: CALL    PAC_PACE
         JMP     GLTICK
 
-; Last life gone.  HUD then SPACE returns to BASIC (START JMPs EXIT).
+; Last life gone.  Commit top score, then R=replay or Q=quit.
 GAME_OVER:
+        CALL    HISCORE_COMMIT
+        CALL    HUD_CLR_SLOT
         LXI     H,MSG_OVER
-        MVI     B,126
-        MVI     C,20
-        CALL    DRAW_STR
-GOVIDL: CALL    POLL_KEYS
-        LDA     KEY_FLAGS
-        ANI     01FH
+        MVI     C,78
+        CALL    HUD_CSTR
+        LXI     H,MSG_RQ
+        MVI     C,88
+        CALL    HUD_CSTR
+GOVIDL: CALL    KBD_MIRROR
+        LXI     H,T200_KSCAN+2
+        MOV     A,M
+        ANI     09H                     ; Q bit0 or R bit3
         JNZ     GOVIDL
-GOVLP:  CALL    POLL_KEYS
-        LDA     KEY_FLAGS
-        ANI     01FH
+GOVLP:  CALL    KBD_MIRROR
+        LXI     H,T200_KSCAN+2
+        MOV     A,M
+        MOV     B,A
+        ANI     08H                     ; R
+        JNZ     GO_REP
+        MOV     A,B
+        ANI     01H                     ; Q
         JZ      GOVLP
+        MVI     A,GST_OVER
+        STA     GAME_STATE
+        RET
+GO_REP: MVI     A,GST_REPLAY
+        STA     GAME_STATE
         RET
 
 ;==============================================================================
@@ -723,7 +1428,73 @@ PELLET_TRY:
         STA     CLR_Y
         MVI     A,CLR_PELLET
         STA     CLR_KIND
-        RET
+        JMP     FRUIT_SPAWN
+
+;==============================================================================
+; Board fruit: spawn at 70/170 pellets, collect for 100..5000, then vanish.
+;==============================================================================
+FRUIT_SPAWN:
+        LDA     DOT_EATEN
+        CPI     FRUIT_DOT1
+        JZ      FSPGO
+        CPI     FRUIT_DOT2
+        RNZ
+FSPGO:  LDA     FRUIT_ON
+        ORA     A
+        RNZ
+        CALL    FRUIT_KIND
+        STA     FRUIT_IDX
+        MVI     A,1
+        STA     FRUIT_ON
+        MVI     A,FRUIT_TICKS
+        STA     FRUIT_TMR
+        JMP     FRUIT_DRAW
+
+FRUIT_TICK:
+        LDA     FRUIT_ON
+        ORA     A
+        RZ
+        LDA     FRUIT_TMR
+        DCR     A
+        STA     FRUIT_TMR
+        RNZ
+        STA     FRUIT_ON
+        MVI     B,FRUIT_X
+        MVI     C,FRUIT_Y
+        JMP     WALL_RESTORE_BOX
+
+FRUIT_TRY:
+        LDA     FRUIT_ON
+        ORA     A
+        RZ
+        LDA     PAC_X
+        MOV     C,A
+        MVI     A,FRUIT_X
+        CALL    ABS_DIFF
+        CPI     SPR_H
+        RNC
+        LDA     PAC_Y
+        MOV     C,A
+        MVI     A,FRUIT_Y
+        CALL    ABS_DIFF
+        CPI     SPR_H
+        RNC
+        XRA     A
+        STA     FRUIT_ON
+        LDA     FRUIT_IDX
+        MOV     E,A
+        MVI     D,0
+        LXI     H,FRUIT_BCD
+        DAD     D
+        MOV     A,M
+        CALL    ADD_BCD_MID
+        MVI     B,FRUIT_X
+        MVI     C,FRUIT_Y
+        JMP     WALL_RESTORE_BOX
+
+FRUIT_BCD:
+        DB      01H,03H,05H,07H         ; 100, 300, 500, 700
+        DB      10H,20H,30H,50H         ; 1000, 2000, 3000, 5000
 
 ;==============================================================================
 ; ENERG_TRY -- corner power pellets.
@@ -895,14 +1666,34 @@ CHECK_BOARD:
         INR     A
         STA     LEVEL
 CB_GO:  CALL    AI_RESET_ROUND
-        CALL    RENDER_MAZE
+        CALL    MAZE_SOFT
         CALL    SPRITES_INIT
-        JMP     READY_BEEP
+        JMP     PLAY_INTRO
+
+; Restroke maze bytes only (HUDs stay).  Pellets come from PELLET_BITS.
+MAZE_SOFT:
+        DI
+        CALL    DRAW_WALLS
+        EI
+        LDA     LEVEL
+        STA     HUD_LL
+        CALL    HUD_LVLDIG
+        JMP     HUD_FRUITS
+
+; New game: maze + left HUD + running score.  Title/lives slot/top score stay.
+BOARD_SOFT:
+        CALL    MAZE_SOFT
+        MVI     A,0FFH
+        STA     SCORE_SHOWN
+        STA     SCORE_SHOWN+1
+        STA     SCORE_SHOWN+2
+        JMP     HUD_SCORE
 
 ;==============================================================================
 ; LIFE_LOST / EYES_REVIVE
 ;==============================================================================
 LIFE_LOST:
+        CALL    DEATH_SOUND             ; wail while Pac is still on the ghost
         LDA     LIVES
         DCR     A
         STA     LIVES
@@ -974,7 +1765,7 @@ ADD_BCD_LO:
         ACI     0
         DAA
         STA     SCORE+2
-        RET
+        JMP     EXTRA_TRY
 
 ADD_BCD_MID:
         MOV     C,A
@@ -986,4 +1777,4 @@ ADD_BCD_MID:
         ACI     0
         DAA
         STA     SCORE+2
-        RET
+        JMP     EXTRA_TRY

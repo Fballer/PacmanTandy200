@@ -130,32 +130,31 @@ SDROW:  LDA     TMP6
         POP     B
         MOV     A,B
         CALL    DIV6
+        PUSH    D                       ; D = screen LCD byte
         PUSH    PSW                     ; remain
-        MOV     B,D
-        PUSH    B                       ; B=byte, C=y
+        CALL    SCR_TO_PAT
+        JC      SD_Z0
         CALL    COMPOSE_BYTE
-        MOV     D,A
-        POP     B
+        JMP     SD_OR
+SD_Z0:  XRA     A                       ; HUD: no maze under the sprite
+SD_OR:  MOV     D,A                     ; maze bits
         POP     PSW
-        PUSH    B
         PUSH    PSW
-        MOV     E,A
+        MOV     E,A                     ; remain
         LDA     TMP0
         MOV     B,E
-        CALL    SHL_N                   ; remain 0: identity
+        CALL    SHL_N
         ANI     03FH
         ORA     D
         CALL    LCD_DATA
-        POP     PSW
-        POP     B
+        POP     PSW                     ; remain
+        POP     D                       ; screen byte
         ORA     A
-        JZ      SDRN                    ; aligned: do not write neighbor
+        JZ      SDRN                    ; aligned: one LCD byte, the fast path
         PUSH    PSW
-        INR     B
-        MOV     A,B
-        CPI     WALL_BYTES
-        JNC     SDX
-        PUSH    B
+        INR     D
+        CALL    SCR_TO_PAT
+        JC      SDX
         LDA     TMP4
         MOV     C,A
         LDA     TMP6
@@ -163,7 +162,6 @@ SDROW:  LDA     TMP6
         MOV     C,A
         CALL    COMPOSE_BYTE
         MOV     D,A
-        POP     B
         POP     PSW
         MOV     C,A
         MVI     A,6
@@ -491,17 +489,6 @@ SPRITES_INIT:
         CALL    FRAME_DELAY
         RET
 
-;==============================================================================
-; SPRITES_REDRAW -- erase at OLD_XY, draw at current actor pixels.
-; Phase 3 calls this once per frame after AI_TICK / Pac move.
-;==============================================================================
-SPRITES_REDRAW:
-        DI
-        CALL    SPRITES_ERASE
-        CALL    SPRITES_PAINT
-        CALL    FRAME_DELAY
-        RET
-
 ; Restore maze under every sprite.  Do NOT write saved LCD bytes -- VirtualT
 ; reads often return 0, which punched holes and turned ghosts into blobs.
 ; Clear the 6x6 box, then restroke walls/pellets in the dirty tiles.
@@ -532,11 +519,7 @@ SRE_G:  LDA     CUR_GID
         STA     CUR_GID
         CPI     GHOST_COUNT
         JNZ     SRE_G
-        LDA     FRUIT_ON
-        ORA     A
-        JZ      SRE_X
-        CALL    DRAW_FRUIT
-SRE_X:  RET
+        RET
 
 ; Paint ghosts first, Pac last.  After DRAW_WALLS the LCD is still catching
 ; up; later pixel writes are the ones that stick, and Pac must be visible.
@@ -615,11 +598,54 @@ SPR_FRIGHT:
 SPR_EYES:
         DB      000H,000H,048H,048H,000H,000H   ; pupils inset (x+1, x+4)
 
-; 6x6 pellet sprites.  Bit 7 = leftmost.  Only the middle pixels are lit.
-; Regular: 2x2 at (2,2).  Power: rounded 12 px.  Rest of the tile is empty.
-SPR_PELLET:
-        DB      000H,000H,030H,030H,000H,000H
-SPR_POWER:
-        DB      030H,078H,0FCH,0FCH,078H,030H   ; 24-pixel diamond
+; Level fruit, 6x6, bit7=left.  Index 0..7 = cherry..key.
+; Bits 7..2 are pixels; bits 1..0 pad.  Hollow 0s are stems / shine / holes.
+SPR_FRUIT:
+        DB      030H,050H,048H,0D8H,0D8H,000H   ; cherry
+        DB      070H,0A8H,0F8H,0F8H,070H,020H   ; strawberry
+        DB      030H,020H,078H,0FCH,0FCH,078H   ; peach
+        DB      020H,020H,078H,0DCH,0FCH,078H   ; apple (R3 shine = ##.###)
+        DB      000H,084H,0CCH,0FCH,078H,030H   ; melon (wedge)
+        DB      030H,078H,030H,0FCH,0B4H,084H   ; Galaxian
+        DB      030H,078H,078H,0FCH,0FCH,030H   ; bell
+        DB      030H,048H,030H,020H,060H,020H   ; key
+
+; A = 0..7 -> HL = 6-byte fruit bitmap.  Destroys B,C.
+FRUIT_BMP_A:
+        ADD     A
+        MOV     B,A
+        ADD     A
+        ADD     B
+        MOV     C,A
+        MVI     B,0
+        LXI     H,SPR_FRUIT
+        DAD     B
+        RET
+
+; A = level 1..N -> A = fruit kind 0..7.
+FRUIT_KIND_A:
+        DCR     A
+        CPI     12
+        JC      FKA1
+        MVI     A,12
+FKA1:   CPI     2
+        RC
+        ANI     0FEH
+        RRC
+        INR     A
+        RET
+
+FRUIT_KIND:
+        LDA     LEVEL
+        JMP     FRUIT_KIND_A
+
+FRUIT_DRAW:
+        LDA     FRUIT_IDX
+        CALL    FRUIT_BMP_A
+        MVI     B,FRUIT_X
+        MVI     C,FRUIT_Y
+        JMP     SPR_DRAW
+
+
 
 
