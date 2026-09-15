@@ -19,7 +19,6 @@
 ; added with DAA.  There is no HUD font yet; SCORE is in RAM for Phase 4.
 ;==============================================================================
 
-FRIGHT_TICKS    EQU     255             ; 8-bit max; ~4s at 60Hz, longer on LCD
 FRUIT_TICKS     EQU     90              ; fruit visible time
 FRUIT_DOT1      EQU     50              ; first fruit after this many pellets
 FRUIT_DOT2      EQU     100             ; second fruit
@@ -425,6 +424,7 @@ GLTICK: CALL    POLL_PLAY
         CALL    PAC_MOVE
         CALL    PELLET_TRY
         CALL    ENERG_TRY
+        CALL    CHECK_BOARD             ; empty maze -> next round
         CALL    AI_TICK                 ; all four think+step
         XRA     A
         STA     CUR_GID
@@ -772,7 +772,6 @@ ETBIT:  MOV     E,A
         CALL    ADD_BCD_LO
         XRA     A
         STA     GHOST_PTS
-        MVI     A,FRIGHT_TICKS
         CALL    AI_FRIGHTEN
         DCX     H
         DCX     H
@@ -879,6 +878,26 @@ GHN:    LDA     CUR_GID
 
 GHOST_BCD:
         DB      02H,04H,08H,16H         ; 200,400,800,1600 in the 00xx00 slots
+
+;==============================================================================
+; CHECK_BOARD -- all pellets and energizers gone: next round.
+;==============================================================================
+CHECK_BOARD:
+        LDA     PELLET_LEFT
+        ORA     A
+        RNZ
+        LDA     ENERG_LEFT
+        ORA     A
+        RNZ
+        LDA     LEVEL
+        CPI     21
+        JZ      CB_GO
+        INR     A
+        STA     LEVEL
+CB_GO:  CALL    AI_RESET_ROUND
+        CALL    RENDER_MAZE
+        CALL    SPRITES_INIT
+        JMP     READY_BEEP
 
 ;==============================================================================
 ; LIFE_LOST / EYES_REVIVE

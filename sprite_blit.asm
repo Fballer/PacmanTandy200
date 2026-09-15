@@ -11,7 +11,6 @@ DELAY_INNER     EQU     0
 PACE_OUTER      EQU     4               ; 4 ghosts already pad the frame; keep a short WASD poll
 SPR_H           EQU     6
 SPR_COUNT       EQU     5               ; Pac + 4 ghosts
-FRIGHT_FLASH    EQU     48              ; last ticks: flash outline <-> solid
 
 ;==============================================================================
 ; FRAME_DELAY -- burn time so the HD61830/LCD can finish the last burst.
@@ -429,8 +428,8 @@ PBM1:   ADD     B                       ; dir*2 + mouth
         RET
 
 ; Ghost: eaten = black pupils.  Frightened = hollow outline + black eyes
-; (monochrome stand-in for blue).  Last FRIGHT_FLASH ticks: blink that
-; outline against the solid body so the scare is visibly ending.
+; (monochrome stand-in for blue).  Last FRIGHT_FLASHW ticks: blink that
+; outline against the solid body (Dossier warning phase).
 GHOST_BITMAP:
         CALL    GHOST_BASE
         LXI     B,GH_MODE
@@ -464,12 +463,16 @@ GB_DIR: CALL    GHOST_BASE
 GB_FR:  LHLD    FRIGHT_TMR
         MOV     A,H
         ORA     A
-        JNZ     GB_OUT                  ; still a long scare
+        JNZ     GB_OUT                  ; remaining >= 256: still blue
+        LDA     FRIGHT_FLASHW
+        MOV     C,A
+        ORA     A
+        JZ      GB_OUT                  ; no warning phase this level
         MOV     A,L
-        CPI     FRIGHT_FLASH
-        JNC     GB_OUT
+        CMP     C
+        JNC     GB_OUT                  ; still in the solid-blue window
         LDA     FRAME_CNT
-        ANI     08H
+        ANI     08H                     ; ~8 ticks/color (arcade is 14)
         JZ      GB_OUT
         JMP     GB_DIR                  ; flash: solid body
 GB_OUT: LXI     H,SPR_FRIGHT

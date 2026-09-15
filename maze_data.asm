@@ -136,6 +136,34 @@ MODE_TABLE:
         DW      0FFFFH
 MODE_TAB_LEN    EQU     8
 
+; Dossier Table A.1.  Duration in 60Hz ticks (same unit as TICKS_7S).
+; LCD frames are slower so wall-clock is longer; ratios match the arcade.
+; Record: time-lo, time-hi, flash window (n_flashes * 28 ticks).
+; 17 / 19+ : 0 time = reverse only, never blue.
+FRIGHT_TAB_N    EQU     21
+FRIGHT_TAB:
+        DB      068H,001H,08CH          ; 1:  6s, 5 flashes
+        DB      02CH,001H,08CH          ; 2:  5s, 5
+        DB      0F0H,000H,08CH          ; 3:  4s, 5
+        DB      0B4H,000H,08CH          ; 4:  3s, 5
+        DB      078H,000H,08CH          ; 5:  2s, 5
+        DB      02CH,001H,08CH          ; 6:  5s, 5  (breather)
+        DB      078H,000H,08CH          ; 7:  2s, 5
+        DB      078H,000H,08CH          ; 8:  2s, 5
+        DB      03CH,000H,054H          ; 9:  1s, 3
+        DB      02CH,001H,08CH          ; 10: 5s, 5  (breather)
+        DB      078H,000H,08CH          ; 11: 2s, 5
+        DB      03CH,000H,054H          ; 12: 1s, 3
+        DB      03CH,000H,054H          ; 13: 1s, 3
+        DB      0B4H,000H,08CH          ; 14: 3s, 5
+        DB      03CH,000H,054H          ; 15: 1s, 3
+        DB      03CH,000H,054H          ; 16: 1s, 3
+        DB      000H,000H,000H          ; 17: 0s
+        DB      03CH,000H,054H          ; 18: 1s, 3
+        DB      000H,000H,000H          ; 19: 0s
+        DB      000H,000H,000H          ; 20: 0s
+        DB      000H,000H,000H          ; 21+: 0s
+
 DIR_PRI:
         DB      DIR_UP, DIR_LEFT, DIR_DOWN, DIR_RIGHT
 

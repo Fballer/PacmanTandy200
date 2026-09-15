@@ -37,8 +37,26 @@ AI_RESET:
         PUSH    B
         PUSH    D
         PUSH    H
+        CALL    AI_RESET_PELLETS
+        XRA     A
+        STA     SCORE
+        STA     SCORE+1
+        STA     SCORE+2
+        STA     DOT_EATEN
+        STA     CLR_KIND
+        STA     DOT_GUSE
+        MVI     A,3
+        STA     LIVES
+        MVI     A,1
+        STA     LEVEL
+        CALL    AI_RESET_ACTORS
+        POP     H
+        POP     D
+        POP     B
+        RET
 
-        ; pellet bitmask
+; Pellets + energizers back.  Score/lives/level are left alone.
+AI_RESET_PELLETS:
         LXI     H,PELLET_INIT
         LXI     D,PELLET_BITS
         MVI     B,PELLET_BYTES
@@ -54,17 +72,21 @@ ARPEL:  MOV     A,M
         STA     ENERG_LEFT
         MVI     A,0FH
         STA     ENERG_MASK
+        RET
+
+; Board clear: refill dots, actors home, personal house clocks.
+; LEVEL already incremented by the caller.
+AI_RESET_ROUND:
+        PUSH    B
+        PUSH    D
+        PUSH    H
+        CALL    AI_RESET_PELLETS
         XRA     A
-        STA     SCORE
-        STA     SCORE+1
-        STA     SCORE+2
         STA     DOT_EATEN
-        STA     CLR_KIND
         STA     DOT_GUSE
-        MVI     A,3
-        STA     LIVES
-        MVI     A,1
-        STA     LEVEL
+        STA     DOT_GLOBAL
+        STA     CLR_KIND
+        STA     GHOST_PTS
         CALL    AI_RESET_ACTORS
         POP     H
         POP     D
@@ -390,19 +412,39 @@ GOF1:   CALL    GHOST_BASE
         RET
 
 ;==============================================================================
-; AI_FRIGHTEN -- Phase 3 calls this when Pac-Man eats an energizer.
-; Reverse, enter frightened, reset ghost-points chain.  Scatter/chase pauses
-; because FRIGHT_TMR becomes non-zero.
-; A = frightened ticks (level-dependent; Phase 3 supplies it).
+; AI_FRIGHTEN -- energizer.  Always reverse.  Blue time is FRIGHT_TAB
+; (Dossier A.1).  Duration 0: reverse only, stay lethal.
 ;==============================================================================
 AI_FRIGHTEN:
-        MOV     L,A
-        MVI     H,0
-        SHLD    FRIGHT_TMR
         XRA     A
         STA     GHOST_PTS
         MVI     A,GF_REV
         CALL    GHOSTS_ORFLAG
+        LDA     LEVEL
+        DCR     A                       ; 1-based -> 0
+        CPI     FRIGHT_TAB_N
+        JC      AF_IDX
+        MVI     A,FRIGHT_TAB_N-1
+AF_IDX: MOV     C,A
+        ADD     A
+        ADD     C                       ; *3
+        MOV     C,A
+        MVI     B,0
+        LXI     H,FRIGHT_TAB
+        DAD     B
+        MOV     A,M
+        STA     FRIGHT_TMR
+        INX     H
+        MOV     A,M
+        STA     FRIGHT_TMR+1
+        INX     H
+        MOV     A,M
+        STA     FRIGHT_FLASHW
+        LDA     FRIGHT_TMR
+        MOV     B,A
+        LDA     FRIGHT_TMR+1
+        ORA     B
+        RZ                              ; 0s: reverse only
         XRA     A
         STA     CUR_GID
 AFF1:   CALL    GHOST_BASE

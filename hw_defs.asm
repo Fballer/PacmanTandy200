@@ -486,6 +486,7 @@ MODE_CUR:       DS      1               ; 0=scatter 1=chase  (global)
 MODE_IDX:       DS      1               ; index into MODE_TABLE
 MODE_TMR:       DS      2               ; 16-bit tick countdown
 FRIGHT_TMR:     DS      2               ; 0 = not frightened
+FRIGHT_FLASHW:  DS      1               ; last ticks: flash blue/white
 FRAME_CNT:      DS      2
 FRUIT_TMR:      DS      1
 FRUIT_ON:       DS      1
