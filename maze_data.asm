@@ -144,6 +144,31 @@ DIR_DX:
 DIR_DY:
         DB      0, 1, 0,    0FFH
 
+; Shortest-path home direction for eyes.  21 rows x 5 bytes, 2 bits per
+; tile (tx 0 in bits 1-0).  BFS from house floor (9,10).  0=R 1=D 2=L 3=U.
+HOME_DIR:
+        DB      000H, 029H, 091H, 092H, 02AH  ; y= 0
+        DB      001H, 001H, 011H, 010H, 010H  ; y= 1
+        DB      001H, 001H, 011H, 010H, 010H  ; y= 2
+        DB      000H, 090H, 00AH, 0A9H, 02AH  ; y= 3
+        DB      003H, 013H, 000H, 031H, 030H  ; y= 4
+        DB      003H, 003H, 091H, 0B2H, 02AH  ; y= 5
+        DB      000H, 001H, 011H, 010H, 000H  ; y= 6
+        DB      000H, 001H, 0A4H, 012H, 000H  ; y= 7
+        DB      000H, 031H, 004H, 013H, 000H  ; y= 8
+        DB      000H, 030H, 024H, 0ABH, 02AH  ; y= 9
+        DB      000H, 033H, 02CH, 033H, 000H  ; y=10
+        DB      000H, 033H, 000H, 033H, 000H  ; y=11
+        DB      000H, 0B3H, 00AH, 033H, 000H  ; y=12
+        DB      000H, 033H, 000H, 033H, 000H  ; y=13
+        DB      000H, 0B3H, 002H, 0ABH, 02AH  ; y=14
+        DB      003H, 003H, 033H, 030H, 030H  ; y=15
+        DB      02BH, 02BH, 0BBH, 032H, 031H  ; y=16
+        DB      010H, 033H, 000H, 033H, 001H  ; y=17
+        DB      000H, 0B3H, 002H, 0B3H, 02AH  ; y=18
+        DB      003H, 000H, 033H, 000H, 030H  ; y=19
+        DB      0ABH, 002H, 0BBH, 02AH, 030H  ; y=20
+
 ;------------------------------------------------------------------------------
 ; Excel W pixels as LCD bytes for x=0..125 (21 bytes = 126 pixels).
 ; Bit 0 = leftmost.  Super-narrow outlines from Last super narrow walls pacman.xlsx

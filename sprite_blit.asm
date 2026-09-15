@@ -8,9 +8,10 @@
 
 DELAY_OUTER     EQU     1               ; LCD settle after maze / GO
 DELAY_INNER     EQU     0
-PACE_OUTER      EQU     4               ; ~3 ms; keep 1px even without a long stall
+PACE_OUTER      EQU     4               ; 4 ghosts already pad the frame; keep a short WASD poll
 SPR_H           EQU     6
 SPR_COUNT       EQU     5               ; Pac + 4 ghosts
+FRIGHT_FLASH    EQU     48              ; last ticks: flash outline <-> solid
 
 ;==============================================================================
 ; FRAME_DELAY -- burn time so the HD61830/LCD can finish the last burst.
@@ -216,7 +217,9 @@ PAC_REDRAW:
         RZ
 PR_VAC: JMP     SPR_VACATE
 
-; Same as PAC_REDRAW for CUR_GID.  GHOST_BASE destroys BC.
+; Same as PAC_REDRAW for CUR_GID.  Hollow fright / eyes are sparse, so the
+; 1px strip vacate leaves pupils behind.  Those modes restroke the old 6x6
+; first, then paint (overlap is maze then sprite -- no hole, no trail).
 GHOST_REDRAW:
         LDA     CUR_GID
         INR     A
@@ -243,7 +246,32 @@ GHOST_REDRAW:
         INX     D
         MOV     A,C
         STAX    D
+        PUSH    B                       ; new xy
+        CALL    GHOST_BASE
+        LXI     D,GH_MODE
+        DAD     D
+        MOV     A,M
+        CPI     MODE_EATEN
+        JZ      GR_SPARSE
+        CPI     MODE_FRIGHT
+        JZ      GR_SPARSE
+        ; Eyes revive teleports to the floor.  1px vacate then leaves
+        ; pupils on the door; restroke the old 6x6 when we jumped.
+        POP     D                       ; D=newX E=newY
+        POP     B                       ; B=oldX C=oldY
         PUSH    B
+        PUSH    D
+        MOV     A,D
+        PUSH    B
+        MOV     C,B                     ; C=oldX
+        CALL    ABS_DIFF
+        POP     B
+        CPI     2
+        JNC     GR_SPARSE
+        MOV     A,E
+        CALL    ABS_DIFF                ; C still oldY
+        CPI     2
+        JNC     GR_SPARSE
         CALL    GHOST_BITMAP
         POP     B
         CALL    SPR_DRAW
@@ -255,6 +283,15 @@ GHOST_REDRAW:
         CMP     C
         RZ
 GR_VAC: JMP     SPR_VACATE
+
+GR_SPARSE:
+        POP     D                       ; new xy in DE
+        POP     B                       ; old
+        PUSH    D
+        CALL    WALL_RESTORE_BOX
+        CALL    GHOST_BITMAP
+        POP     B
+        JMP     SPR_DRAW
 
 ; Maze-only pixels the sprite vacated.  BC = old top-left; TMP3/TMP4 = new.
 ; Vertical: one row.  Horizontal: only LCD bytes no longer covered.
@@ -367,26 +404,21 @@ SPR_SLOT_OLD:
         RET
 
 ;==============================================================================
-; PAC_BITMAP -- HL -> 6-byte frame.  4 dirs * 3 mouths * 6 bytes.
-; PAC_ANIM 0..15 holds each mouth 4 ticks: open, half, closed, half.
+; PAC_BITMAP -- HL -> 6-byte frame.  4 dirs * 2 mouths * 6 bytes.
+; PAC_ANIM 0..15, phase = A & 3: open, open, open, closed.
 PAC_BITMAP:
         LDA     PAC_DIR
-        MOV     B,A
-        ADD     A
-        ADD     B                       ; dir * 3
+        ADD     A                       ; dir * 2
         MOV     B,A
         LDA     PAC_ANIM
-        ORA     A
-        RAR
-        ORA     A
-        RAR                             ; /4 -> phase 0..3
         ANI     03H
         CPI     03H
-        JNZ     PBM1
-        MVI     A,01H                   ; phase 3 = half
-PBM1:   ADD     B                       ; dir*3 + mouth (0 open, 1 half, 2 closed)
-        MOV     C,A                     ; *6 = *2 + *4
-        ADD     A
+        JNZ     PBM0                    ; 0,1,2 = open
+        MVI     A,01H                   ; 3 = closed
+        JMP     PBM1
+PBM0:   XRA     A
+PBM1:   ADD     B                       ; dir*2 + mouth
+        ADD     A                       ; *6 = *2 + *4
         MOV     B,A
         ADD     A
         ADD     B
@@ -396,13 +428,18 @@ PBM1:   ADD     B                       ; dir*3 + mouth (0 open, 1 half, 2 close
         DAD     B
         RET
 
-; Ghost: frightened, else facing GH_DIR; odd anim uses skirt frame 2.
+; Ghost: eaten = black pupils.  Frightened = hollow outline + black eyes
+; (monochrome stand-in for blue).  Last FRIGHT_FLASH ticks: blink that
+; outline against the solid body so the scare is visibly ending.
 GHOST_BITMAP:
-        LDA     FRIGHT_TMR
-        MOV     B,A
-        LDA     FRIGHT_TMR+1
-        ORA     B
-        JNZ     GB_FR
+        CALL    GHOST_BASE
+        LXI     B,GH_MODE
+        DAD     B
+        MOV     A,M
+        CPI     MODE_EATEN
+        JZ      GB_EYES
+        CPI     MODE_FRIGHT
+        JZ      GB_FR
         CALL    GHOST_BASE
         LXI     B,GH_ANIM
         DAD     B
@@ -424,7 +461,21 @@ GB_DIR: CALL    GHOST_BASE
         LXI     H,SPR_GHOST
         DAD     B
         RET
-GB_FR:  LXI     H,SPR_FRIGHT
+GB_FR:  LHLD    FRIGHT_TMR
+        MOV     A,H
+        ORA     A
+        JNZ     GB_OUT                  ; still a long scare
+        MOV     A,L
+        CPI     FRIGHT_FLASH
+        JNC     GB_OUT
+        LDA     FRAME_CNT
+        ANI     08H
+        JZ      GB_OUT
+        JMP     GB_DIR                  ; flash: solid body
+GB_OUT: LXI     H,SPR_FRIGHT
+        RET
+GB_EYES:
+        LXI     H,SPR_EYES
         RET
 
 ;==============================================================================
@@ -534,96 +585,19 @@ SPP_G:  CALL    GHOST_BASE
         CALL    SPR_DRAW
         RET
 
-; Clear a 6x6 pixel box at top-left (B,C).
-SPR_CLEAR_BOX:
-        MOV     A,B
-        STA     TMP3
-        MOV     A,C
-        STA     TMP4
-        XRA     A
-        STA     TMP6
-SCY:    LDA     TMP6
-        CPI     SPR_H
-        RNC
-        XRA     A
-        STA     TMP7
-SCX:    LDA     TMP7
-        CPI     SPR_H
-        JZ      SCYN
-        LDA     TMP3
-        MOV     B,A
-        LDA     TMP7
-        ADD     B
-        MOV     B,A
-        LDA     TMP4
-        MOV     C,A
-        LDA     TMP6
-        ADD     C
-        MOV     C,A
-        CALL    PLOT_CLR
-        LDA     TMP7
-        INR     A
-        STA     TMP7
-        JMP     SCX
-SCYN:   LDA     TMP6
-        INR     A
-        STA     TMP6
-        JMP     SCY
-
-; Restroke pellets under the 6x6 at (B,C).  Walls already restored.
-SPR_REPAIR_BOX:
-        PUSH    B
-        CALL    SPR_FIX_PIX
-        POP     B
-        PUSH    B
-        MOV     A,B
-        ADI     5
-        MOV     B,A
-        CALL    SPR_FIX_PIX
-        POP     B
-        PUSH    B
-        MOV     A,C
-        ADI     5
-        MOV     C,A
-        CALL    SPR_FIX_PIX
-        POP     B
-        MOV     A,B
-        ADI     5
-        MOV     B,A
-        MOV     A,C
-        ADI     5
-        MOV     C,A
-SPR_FIX_PIX:
-        MOV     A,B
-        CALL    PIX_TO_TX
-        STA     TMP4
-        MOV     A,C
-        CALL    PIX_TO_TY
-        STA     TMP5
-        MOV     D,A
-        LDA     TMP4
-        MOV     D,A
-        LDA     TMP5
-        MOV     E,A
-        JMP     PELLET_DOT
-
 ;==============================================================================
 ; 6x6 bitmaps.  Bit 7 = leftmost pixel, bits 1..0 unused.
-; Pac frames: dir (R,D,L,U) * 3 (open, half, closed).
+; Pac frames: dir (R,D,L,U) * 2 (open, closed).
 ; Ghost frames: dir (R,D,L,U), plus feet2 and frightened.
 ;==============================================================================
 SPR_PAC:
         DB      078H,0F0H,0C0H,0C0H,0F0H,078H   ; RIGHT open
-        DB      078H,0F8H,0E0H,0E0H,0F8H,078H   ; RIGHT half
         DB      078H,0FCH,0FCH,0FCH,0FCH,078H   ; RIGHT closed
         DB      078H,0FCH,0FCH,0CCH,048H,000H   ; DOWN open
-        DB      078H,0FCH,0FCH,0FCH,06CH,030H   ; DOWN half
         DB      078H,0FCH,0FCH,0FCH,0FCH,078H   ; DOWN closed
         DB      078H,03CH,00CH,00CH,03CH,078H   ; LEFT open
-        DB      078H,07CH,01CH,01CH,07CH,078H   ; LEFT half
         DB      078H,0FCH,0FCH,0FCH,0FCH,078H   ; LEFT closed
         DB      000H,048H,0CCH,0FCH,0FCH,078H   ; UP open
-        DB      030H,06CH,0FCH,0FCH,0FCH,078H   ; UP half
         DB      078H,0FCH,0FCH,0FCH,0FCH,078H   ; UP closed
 
 SPR_GHOST:
@@ -634,7 +608,9 @@ SPR_GHOST:
 SPR_GHOST_FEET2:
         DB      078H,0FCH,0B4H,0FCH,0FCH,048H
 SPR_FRIGHT:
-        DB      078H,0FCH,0B4H,0FCH,0A8H,0B4H
+        DB      078H,084H,0ACH,084H,084H,0B4H   ; hollow + two black eyes
+SPR_EYES:
+        DB      000H,000H,048H,048H,000H,000H   ; pupils inset (x+1, x+4)
 
 ; 6x6 pellet sprites.  Bit 7 = leftmost.  Only the middle pixels are lit.
 ; Regular: 2x2 at (2,2).  Power: rounded 12 px.  Rest of the tile is empty.

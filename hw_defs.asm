@@ -209,15 +209,16 @@ GDOT_PINKY      EQU     7
 GDOT_INKY       EQU     17
 GDOT_CLYDE      EQU     32
 
-; Scatter targets (tile coords, 8-bit wrap: 0FFH = -1, just outside the maze)
-SCAT_BLINKY_X   EQU     19
-SCAT_BLINKY_Y   EQU     0FFH            ; top-right
-SCAT_PINKY_X    EQU     0FFH
-SCAT_PINKY_Y    EQU     0FFH            ; top-left
-SCAT_INKY_X     EQU     19
-SCAT_INKY_Y     EQU     21              ; bottom-right
-SCAT_CLYDE_X    EQU     0FFH
-SCAT_CLYDE_Y    EQU     21              ; bottom-left
+; Scatter targets (tile coords).  Unsigned Manhattan cannot use 0FFH as
+; -1: |ty-255| gets *smaller* going down, so Blinky circled the house.
+SCAT_BLINKY_X   EQU     18
+SCAT_BLINKY_Y   EQU     0               ; top-right
+SCAT_PINKY_X    EQU     0
+SCAT_PINKY_Y    EQU     0               ; top-left
+SCAT_INKY_X     EQU     18
+SCAT_INKY_Y     EQU     20              ; bottom-right
+SCAT_CLYDE_X    EQU     0
+SCAT_CLYDE_Y    EQU     20              ; bottom-left
 
 CLYDE_SHY       EQU     8               ; tiles; below this, Clyde scatters
 
@@ -345,14 +346,8 @@ LCD_RESTORE:
         EI
         RET
 
-; Optional: true HD61830 character mode (NOT used on EXIT -- see comment).
-LCD_SET_CHAR:
-        DI
-        LXI     H,CHAR_INIT_TAB
-        MVI     B,CHAR_INIT_LEN
-        CALL    LCD_SEQ
-        EI
-        RET
+; Character-mode init is unused: T200 BASIC already runs the HD61830 in
+; graphics.  Switching modes on EXIT scrambles the MENU.
 
 ; (register, data) pairs
 GFX_INIT_TAB:
@@ -376,131 +371,29 @@ GFX_REST_TAB:
         DB      LCD_REG_SAD_H, 00H
 GFX_REST_LEN    EQU     6
 
-CHAR_INIT_TAB:
-        DB      LCD_REG_MODE,  LCD_MODE_CHAR
-        DB      LCD_REG_PITCH, LCD_PITCH_6
-CHAR_INIT_LEN   EQU     2
-
 ;==============================================================================
-; Tandy 200 keyboard matrix scan
+; Keyboard: POLL_KEYS in main.asm.  Do not IN 8155 PA/PB on VirtualT.
 ;------------------------------------------------------------------------------
-; Hardware is the 8155 (same chip as Model 100) but the T200 key WELL and
-; dedicated cursor cluster are NOT laid out like the M100 Technical Manual
-; table.  We strobe columns ourselves rather than CALL the M100 addresses
-; 12CBH / 13DBH (those entry points are in a different ROM on the T200).
+; Hardware is the 8155.  We strobe columns ourselves (T200 ROM key entry
+; points are not the Model 100 12CBH / 13DBH).
 ;
-; CRITICAL: Port B1/B2 also drive the LCD chip-selects and the RTC.  We
-; snapshot them and write them back unchanged except for the column bit
-; we are testing.  Never leave a column permanently selected.
-;
-; Active-low strobe: 0 on the column bit, 1s elsewhere.  A 0 in the row
-; byte at E0H means that key is down.  We invert so KEY_FLAGS bits are 1
-; when pressed.
-;
-; VirtualT (T200/M100) packs SPACE/ARROWS as active-HIGH copies of
-; gSpecialKeys, not the active-LOW letter columns:
-;   col6 bit0 = SPACE
-;   col5 bit4=Left bit5=Right bit6=Up bit7=Down
-; Real silicon is active-LOW (space col6 row0; M100 arrows col5 row4-7).
-; POLL_KEYS in main.asm accepts both encodings, plus WASD (active-LOW
-; letters, same on VirtualT and hardware).  PB bit0 must stay 1 or IN E0
-; always returns column 9 and the PA strobes never reach arrows/space.
+; Active-low strobe: 0 on the column bit.  A 0 at E0H means that key is
+; down.  VirtualT packs SPACE/ARROWS as active-HIGH copies of
+; gSpecialKeys (col6 bit0 = SPACE; col5 bit4-7 = L/R/U/D).  Real silicon
+; is active-LOW.  POLL_KEYS accepts both, plus WASD.  PB bit0 must stay 1
+; or IN E0 always returns column 9.
 ;==============================================================================
-KEYSCAN:
-        PUSH    B
-        PUSH    D
-        PUSH    H
-
-        IN      PIO_PA
-        STA     SAV_B1
-        IN      PIO_PB
-        STA     SAV_B2
-
-        XRA     A
-        STA     KEY_FLAGS
-
-        ; --- arrows: column bit 5 of Port A ---
-        LDA     SAV_B1
-        ANI     11011111B               ; clear bit 5 (strobe col 5)
-        OUT     PIO_PA
-        IN      KBD_ROWS
-        CMA                             ; 1 = pressed
-        MOV     B,A
-        ANI     10000000B               ; row 7 = Right
-        JZ      KSNO_R
-        LDA     KEY_FLAGS
-        ORI     KEY_RIGHT
-        STA     KEY_FLAGS
-KSNO_R: MOV     A,B
-        ANI     01000000B               ; row 6 = Left
-        JZ      KSNO_L
-        LDA     KEY_FLAGS
-        ORI     KEY_LEFT
-        STA     KEY_FLAGS
-KSNO_L: MOV     A,B
-        ANI     00100000B               ; row 5 = Up
-        JZ      KSNO_U
-        LDA     KEY_FLAGS
-        ORI     KEY_UP
-        STA     KEY_FLAGS
-KSNO_U: MOV     A,B
-        ANI     00010000B               ; row 4 = Down
-        JZ      KSNO_D
-        LDA     KEY_FLAGS
-        ORI     KEY_DOWN
-        STA     KEY_FLAGS
-KSNO_D:
-        ; restore Port A before the next strobe
-        LDA     SAV_B1
-        OUT     PIO_PA
-
-        ; --- spacebar: column bit 6 of Port A, row 0 ---
-        LDA     SAV_B1
-        ANI     10111111B
-        OUT     PIO_PA
-        IN      KBD_ROWS
-        CMA
-        ANI     00000001B
-        JZ      KSNO_SP
-        LDA     KEY_FLAGS
-        ORI     KEY_FIRE
-        STA     KEY_FLAGS
-KSNO_SP:
-        LDA     SAV_B1
-        OUT     PIO_PA
-
-        ; BREAK: column 9 = Port B bit 0, row 7.  Active-low.  Only count
-        ; a real 7FH (bit 7 low, others high).  00H means floating/unread
-        ; and would look like every key including BREAK after invert.
-        LDA     SAV_B2
-        ANI     11111110B
-        OUT     PIO_PB
-        IN      KBD_ROWS
-        CPI     07FH
-        JNZ     KSNO_BR
-        LDA     KEY_FLAGS
-        ORI     KEY_EXIT
-        STA     KEY_FLAGS
-KSNO_BR:
-        ; always put the 8155 back the way we found it
-        LDA     SAV_B1
-        OUT     PIO_PA
-        LDA     SAV_B2
-        OUT     PIO_PB
-
-        POP     H
-        POP     D
-        POP     B
-        RET
 
 ;==============================================================================
 ; Tiny 8085 math used by AI  (no MUL anywhere)
 ;------------------------------------------------------------------------------
 ; TILE_MUL6: A = tile 0..19 -> A = tile*6.  Destroys B.
+; *4 + original is *5; add original again.
 TILE_MUL6:
         MOV     B,A
         ADD     A                       ; *2
         ADD     A                       ; *4
+        ADD     B                       ; *5
         ADD     B                       ; *6
         RET
 
@@ -562,6 +455,8 @@ MANHATTAN:
 ;==============================================================================
 ; RUNTIME RAM  -- every DS byte is counted.  Do not add a screen buffer.
 ;------------------------------------------------------------------------------
+;   Not stored in the .CO (LOADM END must stay below T200 MAXRAM 0xEE90).
+;   START / AI_RESET write every live field; leftover bytes are scratch.
 ;   SAVED_SP .. KEY_RAW / temps / sprite backups / local stack
 ;   Total = RAM_END - RAM_START  (must stay < 300)
 ;==============================================================================
@@ -637,9 +532,9 @@ OLD_XY:         DS      10
 ; 5 sprites x 16 bytes (unused -- we restroke, we do not save LCD bytes)
 ; SPR_BACK removed to stay under 300 RAM with 63-byte pellet map.
 
-; Private call stack (grows toward LOCAL_STK).  96 bytes = 48 nested words.
-LOCAL_STK:      DS      96
-LOCAL_STK_TOP   EQU     LOCAL_STK+96
+; Private call stack (grows toward LOCAL_STK).  48 bytes = 24 nested words.
+LOCAL_STK:      DS      48
+LOCAL_STK_TOP   EQU     LOCAL_STK+48
 
 RAM_END:
 RAM_USED        EQU     RAM_END-RAM_START

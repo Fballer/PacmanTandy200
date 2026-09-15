@@ -165,33 +165,6 @@ PLOT_OR:
         POP     D
         RET
 
-;------------------------------------------------------------------------------
-; PLOT_CLR -- clear pixel (B,C).  Used when a pellet/fruit is eaten so the
-; dot does not come back from a sprite background restore.
-;------------------------------------------------------------------------------
-PLOT_CLR:
-        MOV     A,B
-        CPI     LCD_WIDTH
-        RNC
-        MOV     A,C
-        CPI     LCD_HEIGHT
-        RNC
-        PUSH    D
-        CALL    XY_TO_ADDR              ; HL=addr, A=mask
-        CMA
-        MOV     D,A                     ; inverted mask
-        PUSH    H
-        CALL    LCD_SET_ADDR
-        CALL    LCD_RD_BYTE
-        ANA     D
-        MOV     D,A
-        POP     H
-        CALL    LCD_SET_ADDR
-        MOV     A,D
-        CALL    LCD_WR_BYTE
-        POP     D
-        RET
-
 ; OR all 6 pixels of the byte that contains (B,C).  Caller aligns x % 6 == 0.
 PLOT_BYTE_OR:
         PUSH    D
@@ -597,81 +570,6 @@ WRBX:   LDA     TMP6
         STA     TMP6
         JMP     WRBX
 WRBXD:  POP     B
-        RET
-
-
-; HL -> list of x,y,len,dir until len=0.
-DRAW_SEGLIST:
-        MOV     A,M
-        INX     H
-        MOV     B,A
-        MOV     A,M
-        INX     H
-        MOV     C,A
-        MOV     A,M
-        INX     H
-        MOV     E,A
-        MOV     A,M
-        INX     H
-        MOV     D,A
-        MOV     A,E
-        ORA     A
-        RZ
-        PUSH    H
-        MOV     A,D
-        CALL    DRAW_SEG
-        POP     H
-        JMP     DRAW_SEGLIST
-
-; Fill every wall tile as a 6x6 solid (one VRAM byte per row).
-FILL_MAP:
-        XRA     A
-        STA     TMP5
-FMY:    LDA     TMP5
-        CPI     MAP_H
-        RNC
-        XRA     A
-        STA     TMP4
-FMX:    LDA     TMP4
-        CPI     MAP_W
-        JZ      FMYN
-        MOV     D,A
-        LDA     TMP5
-        MOV     E,A
-        CALL    TILE_WALKABLE
-        JZ      FMXN
-        CALL    FILL_TILE
-FMXN:   LDA     TMP4
-        INR     A
-        STA     TMP4
-        JMP     FMX
-FMYN:   LDA     TMP5
-        INR     A
-        STA     TMP5
-        JMP     FMY
-
-; TMP4=tx TMP5=ty.  Tiles are on x%6==0 so PLOT_BYTE_OR is one write per row.
-FILL_TILE:
-        LDA     TMP4
-        CALL    TILE_TO_PX
-        STA     TMP0
-        LDA     TMP5
-        CALL    TILE_TO_PY
-        STA     TMP1
-        MVI     A,6
-        STA     TMP6
-FTLP:   LDA     TMP0
-        MOV     B,A
-        LDA     TMP1
-        MOV     C,A
-        CALL    PLOT_BYTE_OR
-        LDA     TMP1
-        INR     A
-        STA     TMP1
-        LDA     TMP6
-        DCR     A
-        STA     TMP6
-        JNZ     FTLP
         RET
 
 ; Tiny plus at the fruit spawn point.

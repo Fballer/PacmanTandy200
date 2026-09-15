@@ -71,8 +71,11 @@ ARPEL:  MOV     A,M
         POP     B
         RET
 
-; After a death: actors and timers home, pellets/score/lives stay.
-; Dossier: switch to the GLOBAL house-release counter.
+; After a death: actors home, pellets/score/lives stay.  Dossier: the
+; personal 0/30/60 clocks are abandoned.  One GLOBAL counter starts at 0
+; this life (Pinky 7, Inky 17, Clyde 32).  Do not copy DOT_EATEN into
+; GH_DOTCTR -- that credited Clyde with Inky's pellets and dumped all
+; three out of the house after a couple of deaths.
 AI_RESET_LIFE:
         PUSH    B
         PUSH    D
@@ -268,11 +271,21 @@ AI_TICK:
         STA     CUR_GID
 AITG:   CALL    GHOST_THINK
         CALL    GHOST_STEP
-        LDA     CUR_GID
+        CALL    GHOST_BASE
+        LXI     B,GH_MODE
+        DAD     B
+        MOV     A,M
+        CPI     MODE_EATEN
+        JNZ     AITN
+        CALL    GHOST_THINK             ; eyes: second pixel this tick
+        CALL    GHOST_STEP
+AITN:   LDA     CUR_GID
         INR     A
         STA     CUR_GID
-        CPI     1                       ; Blinky only until the other three are cheap to blit
+        CPI     GHOST_COUNT
         JNZ     AITG
+
+        CALL    EYES_REVIVE
 
         POP     H
         POP     D
@@ -430,8 +443,6 @@ HOUSE_RELEASE:
         RET
 
 HR_GLOBAL:
-        LDA     DOT_GLOBAL
-        MOV     B,A
         MVI     A,GID_PINKY
         MVI     C,GDOT_PINKY
         CALL    HR_GCHK
@@ -485,8 +496,8 @@ HRNO:   XRA     A
 
 HR_GCHK:
         STA     CUR_GID
-        MOV     A,B                     ; global counter
-        CMP     C
+        LDA     DOT_GLOBAL              ; GHOST_BASE zeros B; do not keep the
+        CMP     C                       ; count there across Pinky -> Inky
         RC                              ; not yet
         CALL    GHOST_BASE
         LXI     D,GH_MODE
@@ -497,25 +508,27 @@ HR_GCHK:
         CALL    GHOST_LEAVE
         RET
 
-; Flip a house ghost into the current scatter/chase mode, aim at the exit
-; tile, plant a reverse so he turns toward the gate.
+; Face UP (the gate).  Drop queued GF_REV.  GH_HOME=1 until they walk
+; out of the box (eyes just dropped in need that too).
 GHOST_LEAVE:
         CALL    GHOST_BASE
-        PUSH    H
-        LXI     B,GH_MODE
-        DAD     B
-        LDA     MODE_CUR
-        MOV     M,A
-        POP     H
-        PUSH    H
-        LXI     B,GH_HOME
-        DAD     B
-        MVI     M,0
-        POP     H
         LXI     B,GH_FLAGS
         DAD     B
         MOV     A,M
-        ORI     GF_REV
+        ANI     0FDH                    ; clear GF_REV
+        MOV     M,A
+        CALL    GHOST_BASE
+        LXI     B,GH_DIR
+        DAD     B
+        MVI     M,DIR_UP
+        CALL    GHOST_BASE
+        LXI     B,GH_HOME
+        DAD     B
+        MVI     M,1
+        CALL    GHOST_BASE
+        LXI     B,GH_MODE
+        DAD     B
+        LDA     MODE_CUR
         MOV     M,A
         RET
 
@@ -586,8 +599,28 @@ GHOST_THINK:
         CALL    GHOST_TARGET
         CALL    AT_CENTER
         RNZ                             ; not on a decision pixel yet
-
-        ; pending 180 from a mode change?
+        ; Pen waiters bob in their seats.  PICKDIR toward the gate stacked
+        ; Pinky/Inky/Clyde on one tile so a death looked like a missing ghost.
+        CALL    GHOST_BASE
+        PUSH    H
+        LXI     B,GH_MODE
+        DAD     B
+        MOV     A,M
+        POP     H
+        CPI     MODE_HOUSE
+        RZ
+        ; pending 180 from a mode change?  Not while still in the box --
+        ; that turned Pinky into the floor and he never reached a center.
+        CALL    GHOST_BASE
+        PUSH    H
+        LXI     B,GH_HOME
+        DAD     B
+        MOV     A,M
+        POP     H
+        ORA     A
+        JNZ     GTNR
+        CALL    CUR_IN_HOUSE
+        JZ      GTNR                    ; still in the box: do not 180
         CALL    GHOST_BASE
         LXI     B,GH_FLAGS
         DAD     B
@@ -631,6 +664,23 @@ ATCNO:  MVI     A,1
 GHOST_TARGET:
         CALL    GHOST_BASE
         PUSH    H
+        LXI     B,GH_HOME
+        DAD     B
+        MOV     A,M
+        POP     H
+        ORA     A
+        JZ      GT_MODE
+        PUSH    H
+        LXI     B,GH_MODE
+        DAD     B
+        MOV     A,M
+        POP     H
+        CPI     MODE_EATEN
+        JZ      TARG_HOME
+        JMP     TARG_EXIT               ; still in the box: climb to the gate
+GT_MODE:
+        CALL    GHOST_BASE
+        PUSH    H
         LXI     B,GH_MODE
         DAD     B
         MOV     A,M
@@ -668,6 +718,8 @@ TARG_SCATTER:
         STA     TMP1                    ; targ y
         JMP     TARG_STORE
 
+; Eyes: house floor.  Reverse is banned so greedy Manhattan cannot walk
+; into a closer dead-end and bounce forever (see DIR_LEGAL).
 TARG_HOME:
         MVI     A,9                     ; house center tile
         STA     TMP0
@@ -822,6 +874,8 @@ GHOST_PICKDIR:
         MOV     A,M
         CPI     MODE_FRIGHT
         JZ      PICK_FRIGHT
+        CPI     MODE_EATEN
+        JZ      PICK_HOME
 
         MVI     A,0FFH
         STA     BEST_DIST
@@ -864,12 +918,69 @@ PKILL:  POP     B
 
         LDA     BEST_DIR
         CPI     0FFH
-        RZ                              ; nothing legal (should not happen)
-        CALL    GHOST_BASE
+        JNZ     PKUSE
+        CALL    GHOST_BASE              ; trapped: reverse rather than walk walls
+        LXI     B,GH_DIR
+        DAD     B
+        MOV     A,M
+        XRI     02H
+        MOV     M,A
+        RET
+PKUSE:  CALL    GHOST_BASE
         LXI     B,GH_DIR
         DAD     B
         LDA     BEST_DIR
         MOV     M,A
+        RET
+
+; Eyes: one step of the BFS tree toward (9,10).  Reverse is still banned
+; in DIR_LEGAL; last-resort reverse covers "we are facing the wrong way."
+PICK_HOME:
+        CALL    HOME_DIR_AT
+        STA     TMP3
+        CALL    DIR_LEGAL
+        JZ      PFUSE
+        CALL    GHOST_BASE
+        LXI     B,GH_DIR
+        DAD     B
+        MOV     A,M
+        XRI     02H
+        MOV     M,A
+        RET
+
+; A = HOME_DIR[ty][tx], 2 bits.  Row is 5 bytes, tx packed little-endian.
+HOME_DIR_AT:
+        CALL    GHOST_BASE
+        LXI     B,GH_TY
+        DAD     B
+        MOV     A,M
+        ADD     A
+        ADD     A
+        ADD     M                       ; ty*5
+        MOV     C,A
+        MVI     B,0
+        DCX     H
+        MOV     A,M                     ; tx
+        LXI     H,HOME_DIR
+        DAD     B
+        MOV     C,A
+        RRC
+        RRC
+        ANI     07H                     ; tx/4 (rows are 5 bytes, tx 0..18)
+        MOV     E,A
+        MVI     D,0
+        DAD     D
+        MOV     A,C
+        ANI     03H
+        INR     A
+        MOV     B,A
+        MOV     A,M
+HDLP:   DCR     B
+        JZ      HDGOT
+        RRC
+        RRC
+        JMP     HDLP
+HDGOT:  ANI     03H
         RET
 
 ; Frightened: PRNG picks a first try, then walk clockwise until legal.
@@ -897,8 +1008,21 @@ PFUSE:  CALL    GHOST_BASE
         RET
 
 ; DIR_LEGAL: TMP3 = candidate.  Z=1 if the ghost MAY take it.
-; Rejects: reverse, walls, house-entry (unless eaten), forbidden UP.
+; Rejects: reverse (not while still in the pen), walls,
+; house-entry (unless eaten/leaving), forbidden UP, leaving pen early.
+; Eyes must NOT reverse: greedy+reverse walks into dead-ends toward the
+; house and never leaves.  Last-resort reverse is GHOST_PICKDIR only.
 DIR_LEGAL:
+        CALL    GHOST_BASE
+        PUSH    H
+        LXI     B,GH_MODE
+        DAD     B
+        MOV     A,M
+        POP     H
+        CPI     MODE_HOUSE
+        JZ      DLWALL                  ; reverse is the bounce off the gate
+        CALL    CUR_IN_HOUSE
+        JZ      DLWALL                  ; still in the box after release
         CALL    GHOST_BASE
         LXI     B,GH_DIR
         DAD     B
@@ -920,26 +1044,32 @@ DLWALL: CALL    NEXT_TILE
         CALL    TILE_WALKABLE
         RNZ                             ; NZ = wall
 
-        ; house entry rule
+        ; House tiles: eyes may enter.  Pen / still-inside may stay.
+        ; A ghost already outside may not walk back in (that trapped them).
         CALL    IN_HOUSE_TE             ; Z=1 if next tile is house
-        JNZ     DLRED
+        JNZ     DL_OUT
         CALL    GHOST_BASE
         LXI     B,GH_MODE
         DAD     B
         MOV     A,M
         CPI     MODE_EATEN
-        JZ      DLRED                   ; eyes may enter
+        JZ      DLRED
         CPI     MODE_HOUSE
-        JZ      DLRED                   ; already in, may move
-        ; currently outside and next is house -> illegal
-        CALL    GHOST_BASE
-        LXI     B,GH_HOME
+        JZ      DLRED
+        CALL    CUR_IN_HOUSE            ; still in the box, heading out
+        JZ      DLRED
+        MVI     A,1
+        ORA     A                       ; outside + next is house = re-entry
+        RET
+
+DL_OUT: CALL    GHOST_BASE
+        LXI     B,GH_MODE
         DAD     B
         MOV     A,M
-        ORA     A
-        JNZ     DLRED                   ; still flagged in-house (leaving)
+        CPI     MODE_HOUSE
+        JNZ     DLRED                   ; already released: may step onto the gate
         MVI     A,1
-        ORA     A
+        ORA     A                       ; pen: cannot leave until GHOST_LEAVE
         RET
 
 ; red-zone: no UP in scatter/chase
@@ -952,6 +1082,8 @@ DLRED:  LDA     TMP3
         MOV     A,M
         CPI     MODE_FRIGHT
         JZ      DLOK                    ; frightened may turn up
+        CPI     MODE_EATEN
+        JZ      DLOK                    ; eyes may take any corridor home
         CALL    GHOST_BASE
         LXI     B,GH_TX
         DAD     B
@@ -1068,6 +1200,35 @@ IHNO:   MVI     A,1
         ORA     A
         RET
 
+; Z=1 if this ghost's current PIXEL (not stored TX/TY) is in the house.
+; Stored tiles go stale for a step and were letting freed Inky/Clyde walk
+; back in.  Preserves TMP4/TMP5 (next-tile for DIR_LEGAL / GHOST_STEP).
+CUR_IN_HOUSE:
+        LDA     TMP4
+        MOV     B,A
+        LDA     TMP5
+        MOV     C,A
+        PUSH    B
+        CALL    GHOST_BASE
+        MOV     A,M
+        PUSH    H
+        CALL    PIX_TO_TX
+        STA     TMP4
+        POP     H
+        INX     H
+        MOV     A,M
+        CALL    PIX_TO_TY
+        STA     TMP5
+        CALL    IN_HOUSE_TE
+        POP     B
+        PUSH    PSW
+        MOV     A,B
+        STA     TMP4
+        MOV     A,C
+        STA     TMP5
+        POP     PSW
+        RET
+
 ;==============================================================================
 ; GHOST_STEP -- move 1 pixel, unless frightened half-speed skip.
 ;==============================================================================
@@ -1103,11 +1264,96 @@ GSMOVE: CALL    GHOST_BASE
         CALL    GHOST_BASE
         MOV     A,M
         ADD     D
-        MOV     M,A                     ; X
+        STA     TMP0                    ; new X
         INX     H
         MOV     A,M
         ADD     E
-        MOV     M,A                     ; Y
+        STA     TMP1                    ; new Y
+        ; Pen waiters: top-left may stay on floor tile 10 down to Y=66,
+        ; so the 6x6 body punches through the house.  Reverse at the seat.
+        CALL    GHOST_BASE
+        LXI     B,GH_MODE
+        DAD     B
+        MOV     A,M
+        CPI     MODE_HOUSE
+        JNZ     GS_WLK
+        LDA     TMP1
+        CPI     PINKY_Y0+1
+        JNC     GSREV
+GS_WLK: LDA     TMP0
+        CALL    PIX_TO_TX
+        STA     TMP4
+        LDA     TMP1
+        CALL    PIX_TO_TY
+        STA     TMP5
+        MOV     E,A
+        LDA     TMP4                    ; DIV6 in PIX_TO_TY overwrote D
+        MOV     D,A
+        CALL    TILE_WALKABLE
+        JZ      GSWLKO
+GSREV:  CALL    GHOST_BASE              ; wall or illegal house: turn around
+        LXI     B,GH_DIR
+        DAD     B
+        MOV     A,M
+        XRI     02H
+        MOV     M,A
+        ; Eyes that slid 5px into a wall are off the decision pixel.
+        ; Snap to this tile's origin so the next think can pick a way home.
+        CALL    GHOST_BASE
+        PUSH    H
+        LXI     B,GH_MODE
+        DAD     B
+        MOV     A,M
+        POP     H
+        CPI     MODE_EATEN
+        JNZ     GSANIM
+        ; Top-left is still in this corridor (the step into the wall
+        ; was refused).  Centre+2 was already in the wall tile, so snap
+        ; was skipped and they bounced off-grid forever.
+        MOV     A,M
+        CALL    PIX_TO_TX
+        CALL    TILE_TO_PX
+        STA     TMP0
+        CALL    GHOST_BASE
+        INX     H
+        MOV     A,M
+        CALL    PIX_TO_TY
+        CALL    TILE_TO_PY
+        STA     TMP1
+        CALL    GHOST_BASE
+        LDA     TMP0
+        MOV     M,A
+        INX     H
+        LDA     TMP1
+        MOV     M,A
+        JMP     GSANIM
+GSWLKO: CALL    IN_HOUSE_TE             ; TMP4/5 = new tile
+        JNZ     GSH_OUT
+        CALL    GHOST_BASE
+        LXI     B,GH_MODE
+        DAD     B
+        MOV     A,M
+        CPI     MODE_EATEN
+        JZ      GSOK
+        CPI     MODE_HOUSE
+        JZ      GSOK
+        CALL    CUR_IN_HOUSE
+        JZ      GSOK                    ; still inside, may reach the gate
+        JMP     GSREV                   ; already free: do not walk back in
+GSH_OUT:
+        CALL    GHOST_BASE
+        LXI     B,GH_MODE
+        DAD     B
+        MOV     A,M
+        CPI     MODE_HOUSE
+        JNZ     GSOK
+        JMP     GSANIM                  ; pen cannot leave
+GSOK:   CALL    GHOST_BASE
+        LDA     TMP0
+        MOV     M,A
+        INX     H
+        LDA     TMP1
+        MOV     M,A
 
         ; pixel wrap in the tunnel band
         CALL    GHOST_BASE
@@ -1132,15 +1378,14 @@ GSHOME: ; if we have left the house pixel box, clear GH_HOME
         CALL    GHOST_BASE
         MOV     A,M
         CALL    PIX_TO_TX
-        MOV     D,A
+        STA     TMP4
         INX     H
         MOV     A,M
         CALL    PIX_TO_TY
-        MOV     E,A
-        MOV     A,D
-        STA     TMP4
-        MOV     A,E
         STA     TMP5
+        MOV     E,A
+        LDA     TMP4                    ; D was ty after PIX_TO_TY
+        MOV     D,A
         CALL    IN_HOUSE_TE
         JZ      GSANIM                  ; still inside
         CALL    GHOST_BASE

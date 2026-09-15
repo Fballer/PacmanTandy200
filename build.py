@@ -522,8 +522,11 @@ def assemble(
     resolve_equs(parsed, symbols, require=False)
 
     # Second PC walk: real DS sizes, then every label (including RAM) is final.
+    # DS is runtime RAM only -- do NOT put those zeros in the .CO.  Tandy 200
+    # LOADM fails / returns to BASIC if END >= 61104 (0xEE90).
     pc = origin
     image_end = origin
+    code_end = origin
     started = False
     for ln in parsed:
         if ln.mnem == "END":
@@ -551,13 +554,15 @@ def assemble(
         pc = (pc + ln.size) & 0xFFFF
         started = True
         image_end = pc
+        code_end = pc
 
     # GHOST_PINKY EQU GHOSTS+12 and RAM_USED need the final DS addresses.
     resolve_equs(parsed, symbols, require=True)
     symbols.setdefault("RAM_END", image_end)
+    symbols["CODE_END"] = code_end
 
-    # Pass 2 -- emit from origin .. image_end
-    payload = bytearray(image_end - origin)
+    # Pass 2 -- emit code only (origin .. code_end).  DS is not stored.
+    payload = bytearray(code_end - origin)
     listing: list[str] = []
 
     def poke(addr: int, data: bytes, ln: Line) -> None:
@@ -579,9 +584,7 @@ def assemble(
             listing.append(f"            {ln.raw}")
             continue
         if ln.mnem == "DS":
-            n = ln.size
-            poke(ln.pc, bytes(n), ln)
-            hexpart = f"{n} zeros"
+            hexpart = f"{ln.size} RAM"
         elif ln.mnem == "DB":
             data = bytes(eval_expr(op, symbols, where) & 0xFF for op in ln.ops)
             poke(ln.pc, data, ln)
@@ -634,14 +637,24 @@ def main() -> int:
         f.write("\n".join(listing))
         f.write("\n")
     ram = symbols.get("RAM_USED")
+    code_end = symbols.get("CODE_END", origin + len(payload))
     print(f"  origin : ${origin:04X}")
-    print(f"  end    : ${image_end:04X}")
-    print(f"  size   : {len(payload)} bytes payload + 6 byte .CO header")
+    print(f"  code   : ${code_end:04X}  ({len(payload)} bytes in .CO + 6 byte header)")
+    print(f"  ram    : ${image_end:04X}  (DS not stored in the file)")
     if ram is not None:
         print(f"  DS RAM : {ram} bytes (cap 300)")
         if ram > 300:
             print("ERROR: DS usage exceeds 300 bytes", file=sys.stderr)
             return 1
+    # Tandy 200 LOADM / file directory: END must stay below 61104 (0xEE90).
+    t200_himem = 0xEE90
+    file_end = origin + len(payload)
+    if file_end >= t200_himem:
+        print(f"ERROR: .CO END ${file_end:04X} >= $EE90 (61104); LOADM returns to BASIC",
+              file=sys.stderr)
+        return 1
+    if image_end > t200_himem:
+        print(f"WARNING: runtime RAM ends at ${image_end:04X} > $EE90; stack may hit reserved RAM")
     print(f"  output : {OUTPUT}")
     print(f"  listing: {LISTING}")
     print("Done.  BASIC:  CLEAR 256,53248  then  LOADM \"PACMAN\"  then  CALL 53248")

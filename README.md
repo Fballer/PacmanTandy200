@@ -84,7 +84,7 @@ What that means, in plain language:
 
 You must `CLEAR` **before** `LOADM`. If you skip it, BASIC can sit on top of `0xD000` and the load will crash the machine.
 
-Tandy 200 `MAXRAM` is 61104. Our image ends around 58886, so it fits.
+Tandy 200 `MAXRAM` is 61104 (`0xEE90`). `LOADM` returns to BASIC if the `.CO` END is at or past that. The file stores code only; `DS` runtime RAM is not in the payload.
 
 ### 4. Run it
 
@@ -118,6 +118,7 @@ After BREAK you are back in BASIC. Type `MENU` and Enter to see the file list ag
 | Symptom | Likely cause |
 |---------|----------------|
 | `OM` (Out of Memory) or BASIC error on `LOADM` | Forgot `CLEAR 256,53248`, or HIMEM is not `53248` |
+| `LOADM` drops back to BASIC / Ok | `.CO` END was past T200 `MAXRAM` (61104). Rebuild so the file is code-only (no `DS` zeros). |
 | Instant crash / garbage | `CLEAR` was issued *after* `LOADM`, or the model is still Model 100 |
 | MENU text scrambled after quit | Should not happen — we leave the LCD in graphics mode and call ROM CLS at `4F4DH` |
 | Arrows do nothing | Model is not T200 (keyboard matrix differs from the Model 100) |
